@@ -56,5 +56,8 @@ schemes:
       config: Debug
     test:
       config: Debug
+      # 串行执行测试：@AppStorage/UserDefaults 为共享状态，并行会互相污染
+      options:
+        parallelizable: false
       targets:
         - FoodJournalTests
