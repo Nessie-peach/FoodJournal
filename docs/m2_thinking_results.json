@@ -1,0 +1,46 @@
+[
+  {
+    "label": "A1-default",
+    "ok": true,
+    "latency_ms": 6911,
+    "status_code": 200,
+    "completion_tokens": 767,
+    "prompt_tokens": 1410,
+    "reasoning_tokens": 675,
+    "content": "{\"mealName\":\"卤鸡腿套餐饭\",\"items\":[{\"name\":\"白米饭\",\"calories\":220,\"protein\":5,\"carbs\":50,\"fat\":1},{\"name\":\"卤鸡腿\",\"calories\":550,\"protein\":54,\"carbs\":2,\"fat\":31},{\"name\":\"炒时蔬\",\"calories\":75,\"protein\":2,\"carbs\":11,\"fat\":3}]}",
+    "has_reasoning_content": true
+  },
+  {
+    "label": "A2-default",
+    "ok": true,
+    "latency_ms": 6684,
+    "status_code": 200,
+    "completion_tokens": 858,
+    "prompt_tokens": 1410,
+    "reasoning_tokens": 766,
+    "content": "{\"mealName\":\"卤鸡腿套餐饭\",\"items\":[{\"name\":\"卤鸡腿\",\"calories\":400,\"protein\":40,\"carbs\":3,\"fat\":25},{\"name\":\"白米饭\",\"calories\":170,\"protein\":4,\"carbs\":39,\"fat\":0},{\"name\":\"炒时蔬\",\"calories\":75,\"protein\":2,\"carbs\":12,\"fat\":3}]}",
+    "has_reasoning_content": true
+  },
+  {
+    "label": "B1-no-thinking",
+    "ok": true,
+    "latency_ms": 1973,
+    "status_code": 200,
+    "completion_tokens": 107,
+    "prompt_tokens": 1406,
+    "reasoning_tokens": 0,
+    "content": "{\"mealName\":\"卤鸡腿双拼饭\",\"items\":[{\"name\":\"白米饭\",\"calories\":210,\"protein\":4.2,\"carbs\":45.6,\"fat\":0.4},{\"name\":\"卤鸡腿\",\"calories\":320,\"protein\":38,\"carbs\":0,\"fat\":18},{\"name\":\"炒时蔬（娃娃菜、土豆丝）\",\"calories\":110,\"protein\":3,\"carbs\":20,\"fat\":2}]}}",
+    "has_reasoning_content": false
+  },
+  {
+    "label": "B2-no-thinking",
+    "ok": true,
+    "latency_ms": 1842,
+    "status_code": 200,
+    "completion_tokens": 101,
+    "prompt_tokens": 1406,
+    "reasoning_tokens": 0,
+    "content": "{\"mealName\":\"红烧鸡腿套餐\",\"items\":[{\"name\":\"红烧鸡腿\",\"calories\":350,\"protein\":36,\"carbs\":2,\"fat\":18},{\"name\":\"白米饭\",\"calories\":220,\"protein\":4.5,\"carbs\":50,\"fat\":0.5},{\"name\":\"炒时蔬（土豆娃娃菜）\",\"calories\":120,\"protein\":3,\"carbs\":20,\"fat\":3}]}",
+    "has_reasoning_content": false
+  }
+]

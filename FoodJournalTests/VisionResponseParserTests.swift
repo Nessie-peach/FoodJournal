@@ -108,6 +108,24 @@ final class VisionResponseParserTests: XCTestCase {
         }
     }
 
+    // MARK: - 尾随多余 } 容错（M2-0 实测偶发）
+
+    func testParseTrailingExtraBrace() throws {
+        let reply = cleanJSON + "}"
+        let result = try VisionResponseParser.parse(reply)
+        XCTAssertEqual(result.mealName, "午餐")
+        XCTAssertEqual(result.items.count, 1)
+        XCTAssertEqual(result.items[0].name, "鸡腿")
+    }
+
+    func testParseTrailingExtraBraceWithFence() throws {
+        let reply = "```json\n\(cleanJSON)}}\n```"
+        let result = try VisionResponseParser.parse(reply)
+        XCTAssertEqual(result.mealName, "午餐")
+        XCTAssertEqual(result.items.count, 1)
+        XCTAssertEqual(result.items[0].calories, 360)
+    }
+
     // MARK: - extractJSON 单测
 
     func testExtractJSONStripsFenceAndChatter() {
