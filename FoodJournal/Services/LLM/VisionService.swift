@@ -138,6 +138,10 @@ struct VisionService: Sendable {
                     ],
                 ],
             ],
+            // 关闭模型 thinking（实测提速 3.6 倍，见 docs/M2-thinking提速验证.md）。
+            // 注意：该参数为火山引擎端点特有；其他厂商不识别时可能忽略或返回 400，
+            // 届时用户可在设置页看到错误提示（当前默认厂商即火山，可接受）。
+            "thinking": ["type": "disabled"],
             "stream": false,
         ]
     }
@@ -172,11 +176,24 @@ enum VisionResponseParser {
     /// 提取 JSON 并解码；失败抛 `VisionError.parseFailed`（带原始回复前 200 字符）。
     static func parse(_ reply: String) throws -> MealRecognitionResult {
         guard let jsonText = extractJSON(from: reply),
-              let jsonData = jsonText.data(using: .utf8),
-              let result = try? JSONDecoder().decode(TolerantRecognitionResult.self, from: jsonData) else {
+              let jsonData = jsonText.data(using: .utf8) else {
             throw VisionError.parseFailed(String(reply.prefix(200)))
         }
-        return result.toResult()
+        if let result = try? JSONDecoder().decode(TolerantRecognitionResult.self, from: jsonData) {
+            return result.toResult()
+        }
+        // 容错：模型偶发在合法 JSON 之后尾随多余 `}`（M2-0 实测）。
+        // 「第一个 { 到最后一个 }」的截取策略会把尾括号包含进来导致解码失败，
+        // 这里逐次去掉末尾的 `}` 再试。
+        var trimmed = jsonText
+        while trimmed.hasSuffix("}") {
+            trimmed = String(trimmed.dropLast())
+            if let data = trimmed.data(using: .utf8),
+               let result = try? JSONDecoder().decode(TolerantRecognitionResult.self, from: data) {
+                return result.toResult()
+            }
+        }
+        throw VisionError.parseFailed(String(reply.prefix(200)))
     }
 
     /// 从模型回复文本中提取 JSON：
