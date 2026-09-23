@@ -45,6 +45,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.somethingwierd.FoodJournalTests
         GENERATE_INFOPLIST_FILE: "YES"
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/FoodJournal.app/FoodJournal
+        BUNDLE_LOADER: $(TEST_HOST)
 schemes:
   FoodJournal:
     build:
