@@ -1,13 +1,44 @@
 import SwiftUI
 import SwiftData
+import PhotosUI
 
-/// 首页：今日饮食记录列表 + 汇总
+/// 首页：今日饮食记录列表 + 汇总 + 拍照识图入口
 struct HomeView: View {
     @Environment(\.modelContext) private var modelContext
 
     @Query private var todayMeals: [Meal]
 
-    @State private var showCameraAlert = false
+    // MARK: - 识图流程状态
+
+    @AppStorage(LLMProviderConfig.visionStorageKey) private var visionConfigJSON: String = LLMProviderConfig.default.asJSON
+
+    @State private var showSourceDialog = false
+    @State private var showCamera = false
+    @State private var showPhotoPicker = false
+    @State private var photoPickerItem: PhotosPickerItem?
+
+    /// 已压缩、待识别/待保存的照片 JPEG Data
+    @State private var pendingImageData: Data?
+    @State private var isRecognizing = false
+    @State private var recognitionTask: Task<Void, Never>?
+
+    @State private var showConfigAlert = false
+    @State private var showFailureAlert = false
+    @State private var failureMessage = ""
+    @State private var showImageLoadError = false
+
+    @State private var showSettings = false
+    @State private var editRoute: EditRoute?
+
+    /// 跳转 MealEditView 的路由参数（Hashable 以配合 navigationDestination(item:)）
+    struct EditRoute: Hashable {
+        var prefill: MealEditView.Prefill
+        var focusName: Bool
+    }
+
+    private var cameraAvailable: Bool {
+        UIImagePickerController.isSourceTypeAvailable(.camera)
+    }
 
     init() {
         // 今日范围（含边界当天全天）
@@ -52,10 +83,13 @@ struct HomeView: View {
                     MealEditView(meal: meal)
                 }
             }
+            .navigationDestination(item: $editRoute) { route in
+                MealEditView(prefill: route.prefill, focusNameOnAppear: route.focusName)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
-                        showCameraAlert = true
+                        showSourceDialog = true
                     } label: {
                         Image(systemName: "camera.fill")
                     }
@@ -70,13 +104,158 @@ struct HomeView: View {
                     .accessibilityLabel("新增一餐")
                 }
             }
-            .alert("提示", isPresented: $showCameraAlert) {
+            .confirmationDialog("拍照识别", isPresented: $showSourceDialog, titleVisibility: .visible) {
+                Button("拍照") { showCamera = true }
+                    .disabled(!cameraAvailable)
+                Button("从相册选择") { showPhotoPicker = true }
+                Button("取消", role: .cancel) {}
+            } message: {
+                if !cameraAvailable {
+                    Text("当前设备没有可用相机（模拟器），请从相册选择")
+                }
+            }
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraPicker { image in
+                    handlePickedImage(image)
+                }
+                .ignoresSafeArea()
+            }
+            .photosPicker(isPresented: $showPhotoPicker, selection: $photoPickerItem, matching: .images)
+            .onChange(of: photoPickerItem) { _, newItem in
+                loadPickedPhoto(newItem)
+            }
+            .overlay {
+                if isRecognizing {
+                    recognizingOverlay
+                }
+            }
+            .alert("尚未完成配置", isPresented: $showConfigAlert) {
+                Button("前往设置") { showSettings = true }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("请先在设置页填写识图模型的 BaseURL、模型 ID 和 API Key")
+            }
+            .alert("识别失败", isPresented: $showFailureAlert) {
+                Button("重试") { retryRecognition() }
+                Button("手动记录") { routeToManualEdit() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text(failureMessage)
+            }
+            .alert("无法读取图片", isPresented: $showImageLoadError) {
                 Button("好的", role: .cancel) {}
             } message: {
-                Text("拍照识别将在下一版本提供")
+                Text("所选图片无法读取或处理，请换一张试试")
+            }
+            .sheet(isPresented: $showSettings) {
+                SettingsView()
             }
         }
     }
+
+    // MARK: - 识别中遮罩
+
+    private var recognizingOverlay: some View {
+        ZStack {
+            Rectangle().fill(.ultraThinMaterial)
+            VStack(spacing: 16) {
+                ProgressView()
+                    .controlSize(.large)
+                Text("正在识别…")
+                    .font(.headline)
+                Button("取消") { cancelRecognition() }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    // MARK: - 图片入口
+
+    /// 相册选图：异步载入 Data → UIImage 后进入统一识别流程
+    private func loadPickedPhoto(_ item: PhotosPickerItem?) {
+        guard let item else { return }
+        Task {
+            if let data = try? await item.loadTransferable(type: Data.self),
+               let image = UIImage(data: data) {
+                handlePickedImage(image)
+            } else {
+                showImageLoadError = true
+            }
+        }
+        photoPickerItem = nil
+    }
+
+    /// 拍照/相册共用入口：压缩 → 配置检查 → 发起识别
+    private func handlePickedImage(_ image: UIImage) {
+        guard let data = ImageCompression.compress(image) else {
+            showImageLoadError = true
+            return
+        }
+        pendingImageData = data
+
+        let config = LLMProviderConfig(json: visionConfigJSON) ?? .default
+        let apiKey = KeychainStore.vision.load()
+        guard RecognitionFlowLogic.isConfigComplete(config: config, apiKey: apiKey) else {
+            showConfigAlert = true
+            return
+        }
+        startRecognition(config: config, apiKey: apiKey ?? "")
+    }
+
+    // MARK: - 识别流程
+
+    private func startRecognition(config: LLMProviderConfig, apiKey: String) {
+        guard let data = pendingImageData, !isRecognizing else { return }
+        isRecognizing = true
+        recognitionTask = Task {
+            do {
+                let result = try await VisionService().recognizeFood(
+                    imageData: data, config: config, apiKey: apiKey
+                )
+                guard !Task.isCancelled else { return }
+                // 识别成功：立即跳编辑页（识别模式），焦点落餐名
+                editRoute = EditRoute(
+                    prefill: MealEditView.Prefill(
+                        name: result.mealName,
+                        items: result.items.map { MealEditView.ItemDraft(draft: $0) },
+                        photoData: data
+                    ),
+                    focusName: true
+                )
+            } catch is CancellationError {
+                // 用户取消，静默
+            } catch let error as URLError where error.code == .cancelled {
+                // 用户取消，静默
+            } catch {
+                failureMessage = (error as? LocalizedError)?.errorDescription ?? "识别失败，请重试"
+                showFailureAlert = true
+            }
+            isRecognizing = false
+        }
+    }
+
+    private func cancelRecognition() {
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        isRecognizing = false
+    }
+
+    private func retryRecognition() {
+        let config = LLMProviderConfig(json: visionConfigJSON) ?? .default
+        let apiKey = KeychainStore.vision.load() ?? ""
+        startRecognition(config: config, apiKey: apiKey)
+    }
+
+    /// 识别失败后改手动记录：仅保留照片预填，其余手动填
+    private func routeToManualEdit() {
+        editRoute = EditRoute(
+            prefill: MealEditView.Prefill(name: "", items: [], photoData: pendingImageData),
+            focusName: true
+        )
+    }
+
+    // MARK: - 记录删除
 
     private func deleteMeals(at offsets: IndexSet) {
         let repository = MealRepository(context: modelContext)

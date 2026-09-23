@@ -20,6 +20,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>拍照用于识别饮食内容并记录营养信息</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

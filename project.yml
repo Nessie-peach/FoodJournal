@@ -34,6 +34,7 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
+        NSCameraUsageDescription: "拍照用于识别饮食内容并记录营养信息"
   FoodJournalTests:
     type: bundle.unit-test
     platform: iOS
