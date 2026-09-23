@@ -1,0 +1,23 @@
+{
+  "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+  "tests": [
+    {
+      "name": "GET /models 端点可用性",
+      "request": {
+        "method": "GET",
+        "url": "https://ark.cn-beijing.volces.com/api/v3/models",
+        "auth": "Bearer <key>"
+      },
+      "status_code": 401,
+      "latency_ms": 144,
+      "response": {
+        "error": {
+          "code": "AuthenticationError",
+          "message": "The API key or AK/SK in the request is missing or invalid. Request id: 0217901277786523587b81e5d6fed80d7b8fbd8e8cb3fa62ad42e",
+          "param": "",
+          "type": "Unauthorized"
+        }
+      }
+    }
+  ]
+}
