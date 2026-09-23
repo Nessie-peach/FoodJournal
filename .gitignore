@@ -1,0 +1,17 @@
+# Xcode 用户数据
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+
+# 构建派生物
+build/
+DerivedData/
+*.xcarchive
+*.ipa
+*.dSYM/
+
+# XcodeGen 生成的工程文件（由 project.yml 重新生成）
+*.xcodeproj
+
+# macOS
+.DS_Store

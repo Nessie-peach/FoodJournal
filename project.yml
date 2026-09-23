@@ -1,0 +1,58 @@
+name: FoodJournal
+options:
+  bundleIdPrefix: com.somethingwierd
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    PRODUCT_NAME: "$(TARGET_NAME)"
+    ALWAYS_SEARCH_USER_PATHS: "NO"
+  configs:
+    debug:
+      ENABLE_TESTABILITY: "YES"
+targets:
+  FoodJournal:
+    type: application
+    platform: iOS
+    sources:
+      - path: FoodJournal
+        excludes:
+          - "Info.plist"
+          - "**/.gitkeep"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.somethingwierd.FoodJournal
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: FoodJournal/Info.plist
+      properties:
+        CFBundleDisplayName: 今天吃什么
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen: {}
+  FoodJournalTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: FoodJournalTests
+    dependencies:
+      - target: FoodJournal
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.somethingwierd.FoodJournalTests
+        GENERATE_INFOPLIST_FILE: "YES"
+schemes:
+  FoodJournal:
+    build:
+      targets:
+        FoodJournal: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - FoodJournalTests
