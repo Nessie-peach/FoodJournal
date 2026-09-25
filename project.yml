@@ -27,6 +27,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.somethingwierd.FoodJournal
         TARGETED_DEVICE_FAMILY: "1,2"
+    entitlements:
+      path: FoodJournal/FoodJournal.entitlements
+      properties:
+        com.apple.developer.healthkit: true
     info:
       path: FoodJournal/Info.plist
       properties:
@@ -35,6 +39,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         NSCameraUsageDescription: "拍照用于识别饮食内容并记录营养信息"
+        NSHealthShareUsageDescription: "读取你的运动消耗、睡眠与心率数据，用于今日健康概览、统计与健康建议。"
   FoodJournalTests:
     type: bundle.unit-test
     platform: iOS

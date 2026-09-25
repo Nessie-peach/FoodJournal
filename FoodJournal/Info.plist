@@ -22,6 +22,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>拍照用于识别饮食内容并记录营养信息</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>读取你的运动消耗、睡眠与心率数据，用于今日健康概览、统计与健康建议。</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

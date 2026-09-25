@@ -29,9 +29,117 @@ struct SettingsView: View {
                 DataManagementSection(
                     modelContext: modelContext
                 )
+
+                HealthDataSection()
             }
             .navigationTitle("我的")
         }
+    }
+}
+
+// MARK: - 健康数据（HealthKit 同步状态与操作）
+
+private struct HealthDataSection: View {
+    @Environment(\.modelContext) private var modelContext
+    @AppStorage(HealthKitService.authRequestedStorageKey) private var hasRequestedHealthAuth = false
+
+    @State private var state: HealthAuthorizationState = .notDetermined
+    @State private var isSyncing = false
+    @State private var syncResult: String?
+
+    var body: some View {
+        Section {
+            permissionRow
+
+            // 佳明同步引导：固定文案
+            Text("数据来自苹果健康。请在佳明 Connect 中开启：头像 → 设置 → 已连接的设备 → 健康（Apple Health）→ 打开共享")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            Button {
+                Task { await syncNow() }
+            } label: {
+                HStack {
+                    if isSyncing {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text("立即同步")
+                }
+            }
+            .disabled(isSyncing || state == .denied)
+
+            if let syncResult {
+                Text(syncResult)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("健康数据")
+        } footer: {
+            Text("App 变为前台时自动同步最近 7 天数据；也可手动立即同步。")
+                .font(.footnote)
+        }
+        .onAppear { refreshState() }
+    }
+
+    @ViewBuilder
+    private var permissionRow: some View {
+        switch state {
+        case .authorized:
+            HStack {
+                Text("HealthKit 权限")
+                Spacer()
+                Text("已授权").foregroundStyle(.green).font(.footnote)
+            }
+        case .notDetermined:
+            HStack {
+                Text("HealthKit 权限")
+                Spacer()
+                Button("去授权") {
+                    Task {
+                        try? await HealthKitService().requestAuthorization()
+                        hasRequestedHealthAuth = true
+                        refreshState()
+                    }
+                }
+                .font(.footnote)
+            }
+        case .denied:
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("HealthKit 权限")
+                    Spacer()
+                    Text("被拒绝").foregroundStyle(.red).font(.footnote)
+                }
+                Text("请到系统设置开启")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button("前往系统设置") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                .font(.footnote)
+            }
+        }
+    }
+
+    private func refreshState() {
+        state = HealthKitService().authorizationState(hasRequestedBefore: hasRequestedHealthAuth)
+    }
+
+    private func syncNow() async {
+        isSyncing = true
+        syncResult = nil
+        defer { isSyncing = false }
+        let service = HealthKitService()
+        guard service.authorizationState(hasRequestedBefore: hasRequestedHealthAuth) == .authorized else {
+            syncResult = "未授权，无法同步"
+            return
+        }
+        await service.syncRecent(days: 7, context: modelContext)
+        syncResult = "已同步最近 7 天健康数据"
     }
 }
 
