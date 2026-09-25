@@ -11,8 +11,11 @@ protocol HealthSnapshotRepositoryProtocol {
         date: Date,
         activeKcal: Double,
         sleepMinutes: Double,
+        sleepStart: Date?,
+        sleepEnd: Date?,
         avgHR: Double,
         hrvMS: Double?,
+        workoutsJSON: String?,
         syncedAt: Date
     ) throws -> DailyHealthSnapshot
     func fetchAll() throws -> [DailyHealthSnapshot]
@@ -49,15 +52,21 @@ final class HealthSnapshotRepository: HealthSnapshotRepositoryProtocol {
         date: Date,
         activeKcal: Double,
         sleepMinutes: Double,
+        sleepStart: Date? = nil,
+        sleepEnd: Date? = nil,
         avgHR: Double,
-        hrvMS: Double?,
+        hrvMS: Double? = nil,
+        workoutsJSON: String? = nil,
         syncedAt: Date
     ) throws -> DailyHealthSnapshot {
         if let existing = try snapshot(for: date) {
             existing.activeKcal = activeKcal
             existing.sleepMinutes = sleepMinutes
+            existing.sleepStart = sleepStart
+            existing.sleepEnd = sleepEnd
             existing.avgHR = avgHR
             existing.hrvMS = hrvMS
+            existing.workoutsJSON = workoutsJSON
             existing.syncedAt = syncedAt
             try context.save()
             return existing
@@ -66,8 +75,11 @@ final class HealthSnapshotRepository: HealthSnapshotRepositoryProtocol {
             date: date,
             activeKcal: activeKcal,
             sleepMinutes: sleepMinutes,
+            sleepStart: sleepStart,
+            sleepEnd: sleepEnd,
             avgHR: avgHR,
             hrvMS: hrvMS,
+            workoutsJSON: workoutsJSON,
             syncedAt: syncedAt
         )
         context.insert(snapshot)
