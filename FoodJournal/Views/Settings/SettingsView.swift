@@ -1,6 +1,10 @@
 import SwiftUI
+import SwiftData
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
+    @Environment(\.modelContext) private var modelContext
+
     var body: some View {
         NavigationStack {
             Form {
@@ -22,14 +26,142 @@ struct SettingsView: View {
                     keychain: .advice
                 )
 
-                Section {
-                    Text("导出 / 导入功能将在后续版本提供")
-                        .foregroundStyle(.secondary)
-                } header: {
-                    Text("数据管理（导出/导入，后续版本提供）")
-                }
+                DataManagementSection(
+                    modelContext: modelContext
+                )
             }
             .navigationTitle("我的")
+        }
+    }
+}
+
+// MARK: - 数据管理（导出 / 导入备份）
+
+private struct DataManagementSection: View {
+    let modelContext: ModelContext
+
+    /// 最近一次成功导出的时间戳（0 = 从未导出）
+    @AppStorage(BackupService.lastExportStorageKey) private var lastExportTimestamp: Double = 0
+
+    @State private var isExporting = false
+    @State private var exportedURL: URL?
+    @State private var showImporter = false
+    @State private var isImporting = false
+    @State private var importReport: ImportReport?
+    @State private var errorMessage: String?
+
+    private var lastExportText: String {
+        guard lastExportTimestamp > 0 else { return "从未导出" }
+        return Date(timeIntervalSince1970: lastExportTimestamp)
+            .formatted(date: .abbreviated, time: .shortened)
+    }
+
+    var body: some View {
+        Section {
+            HStack {
+                Text("上次导出")
+                Spacer()
+                Text(lastExportText)
+                    .foregroundStyle(.secondary)
+                    .font(.footnote)
+            }
+
+            Button {
+                runExport()
+            } label: {
+                HStack {
+                    if isExporting {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text("导出数据")
+                }
+            }
+            .disabled(isExporting || isImporting)
+
+            if let exportedURL {
+                ShareLink(item: exportedURL, preview: SharePreview("今天吃什么-备份")) {
+                    Label("分享刚导出的备份文件", systemImage: "square.and.arrow.up")
+                }
+            }
+
+            Button {
+                showImporter = true
+            } label: {
+                HStack {
+                    if isImporting {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text("导入数据")
+                }
+            }
+            .disabled(isExporting || isImporting)
+        } header: {
+            Text("数据管理")
+        } footer: {
+            Text("侧载 App 每 7 天需重装，请定期导出备份。备份含餐食/照片/体重/小记/建议，不含模型配置与 API Key。")
+                .font(.footnote)
+        }
+        .fileImporter(
+            isPresented: $showImporter,
+            allowedContentTypes: [.json],
+            allowsMultipleSelection: false
+        ) { result in
+            handleImportResult(result)
+        }
+        .alert("导入完成", isPresented: .init(
+            get: { importReport != nil },
+            set: { if !$0 { importReport = nil } }
+        )) {
+            Button("好的", role: .cancel) {}
+        } message: {
+            Text(importReport?.summary ?? "")
+        }
+        .alert("操作失败", isPresented: .init(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("好的", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    // MARK: 导出
+
+    private func runExport() {
+        isExporting = true
+        defer { isExporting = false }
+        do {
+            let url = try BackupService(modelContext: modelContext).export()
+            lastExportTimestamp = Date().timeIntervalSince1970
+            exportedURL = url
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: 导入
+
+    private func handleImportResult(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            errorMessage = error.localizedDescription
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            isImporting = true
+            defer { isImporting = false }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let report = try BackupService(modelContext: modelContext).importBackup(from: url)
+                importReport = report
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

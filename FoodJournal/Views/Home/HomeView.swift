@@ -6,8 +6,29 @@ import PhotosUI
 struct HomeView: View {
     @Environment(\.modelContext) private var modelContext
 
+    /// 上层 TabView 的选中态：备份横幅点击时跳转「我的」
+    @Binding var selectedTab: AppTab
+
     @Query private var todayMeals: [Meal]
     @Query private var weightRecords: [WeightRecord]
+
+    // MARK: - 备份提醒
+
+    @AppStorage(BackupService.lastExportStorageKey) private var lastExportTimestamp: Double = 0
+
+    /// 从未导出，或距上次导出超过 5 天 → 显示备份提醒横幅
+    private var showBackupBanner: Bool {
+        lastExportTimestamp <= 0
+            || Date().timeIntervalSince1970 - lastExportTimestamp > 5 * 24 * 3600
+    }
+
+    private var backupBannerText: String {
+        guard lastExportTimestamp > 0 else {
+            return "你还没有备份过数据，侧载重装会丢数据，去我的-数据管理导出"
+        }
+        let days = max(1, Int((Date().timeIntervalSince1970 - lastExportTimestamp) / (24 * 3600)))
+        return "已 \(days) 天未备份，侧载重装会丢数据，去我的-数据管理导出"
+    }
 
     // MARK: - 今日页模式
 
@@ -60,7 +81,8 @@ struct HomeView: View {
         UIImagePickerController.isSourceTypeAvailable(.camera)
     }
 
-    init() {
+    init(selectedTab: Binding<AppTab>) {
+        _selectedTab = selectedTab
         // 今日范围（含边界当天全天）
         let calendar = Calendar.current
         let start = calendar.startOfDay(for: .now)
@@ -230,6 +252,16 @@ struct HomeView: View {
 
     private var dietList: some View {
         List {
+            if showBackupBanner {
+                Section {
+                    BackupBanner(text: backupBannerText) {
+                        selectedTab = .settings
+                    }
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                }
+            }
+
             Section {
                 SummaryBar(meals: todayMeals)
                     .listRowInsets(EdgeInsets())
@@ -428,6 +460,36 @@ struct HomeView: View {
     }
 }
 
+// MARK: - 备份提醒横幅
+
+/// 数据备份提醒：点击跳转「我的」tab 的数据管理区
+private struct BackupBanner: View {
+    let text: String
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(text)
+                    .font(.footnote)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(text + "，点按前往数据管理")
+    }
+}
+
 // MARK: - 今日汇总
 
 private struct SummaryBar: View {
@@ -608,6 +670,6 @@ private struct PhotoConfirmView: View {
 }
 
 #Preview {
-    HomeView()
+    HomeView(selectedTab: .constant(.home))
         .modelContainer(for: [Meal.self, FoodItem.self, WeightRecord.self, DailyJournal.self, DailyAdvice.self, DailyHealthSnapshot.self], inMemory: true)
 }
