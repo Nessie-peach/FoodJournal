@@ -77,14 +77,6 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Picker("今日模式", selection: $selectedMode) {
-                    Text("管住嘴").tag(TodayMode.diet)
-                    Text("迈开腿").tag(TodayMode.exercise)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-
                 switch selectedMode {
                 case .diet:
                     dietList
@@ -92,7 +84,8 @@ struct HomeView: View {
                     exercisePlaceholder
                 }
             }
-            .navigationTitle("今天吃什么")
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: UUID.self) { id in
                 if let meal = todayMeals.first(where: { $0.id == id }) {
                     MealEditView(meal: meal)
@@ -109,6 +102,13 @@ struct HomeView: View {
                         Image(systemName: "camera.fill")
                     }
                     .accessibilityLabel("拍照识别")
+                }
+                ToolbarItem(placement: .principal) {
+                    Picker("今日模式", selection: $selectedMode) {
+                        Text("管住嘴").tag(TodayMode.diet)
+                        Text("迈开腿").tag(TodayMode.exercise)
+                    }
+                    .pickerStyle(.segmented)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
