@@ -17,6 +17,8 @@ struct MealEditView: View {
 
     /// 待保存的照片数据（编辑模式下仅在非 nil 时覆盖）
     @State private var photoData: Data?
+    /// 其余照片（首图之后），保存时写入 Meal.additionalPhotos
+    @State private var additionalPhotos: [Data] = []
     @FocusState private var nameFieldFocused: Bool
 
     @State private var name: String = ""
@@ -53,6 +55,7 @@ struct MealEditView: View {
         var name: String = ""
         var items: [ItemDraft] = []
         var photoData: Data?
+        var additionalPhotos: [Data] = []
     }
 
     // MARK: - 实时合计
@@ -92,6 +95,7 @@ struct MealEditView: View {
         _mealType = State(initialValue: meal.type ?? .lunch)
         _date = State(initialValue: meal.date)
         _photoData = State(initialValue: meal.photoData)
+        _additionalPhotos = State(initialValue: meal.additionalPhotos)
         _itemDrafts = State(initialValue: meal.items
             .sorted { $0.id.uuidString < $1.id.uuidString }
             .map { ItemDraft(name: $0.name, calories: $0.calories, protein: $0.protein, carbs: $0.carbs, fat: $0.fat) })
@@ -107,6 +111,7 @@ struct MealEditView: View {
         _date = State(initialValue: now)
         _name = State(initialValue: prefill.name)
         _photoData = State(initialValue: prefill.photoData)
+        _additionalPhotos = State(initialValue: prefill.additionalPhotos)
         _itemDrafts = State(initialValue: prefill.items.isEmpty ? [ItemDraft()] : prefill.items)
     }
 
@@ -129,14 +134,28 @@ struct MealEditView: View {
                 DatePicker("时间", selection: $date)
             }
 
-            if let data = photoData, let image = UIImage(data: data) {
-                Section("照片") {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: 200)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .accessibilityLabel("餐食照片")
+            if photoData != nil || !additionalPhotos.isEmpty {
+                Section("照片（\(allPhotos.count)）") {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(allPhotos.indices, id: \.self) { index in
+                                if let image = UIImage(data: allPhotos[index]) {
+                                    VStack(spacing: 4) {
+                                        Image(uiImage: image)
+                                            .resizable()
+                                            .scaledToFill()
+                                            .frame(width: 120, height: 120)
+                                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                                        Text(index == 0 ? "封面" : "第 \(index + 1) 张")
+                                            .font(.caption2)
+                                            .foregroundStyle(index == 0 ? .orange : .secondary)
+                                    }
+                                    .accessibilityLabel(index == 0 ? "餐食封面照片" : "餐食照片\(index + 1)")
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
                 }
             }
 
@@ -182,6 +201,13 @@ struct MealEditView: View {
         }
     }
 
+    // MARK: - 照片
+
+    /// 全部照片（首图在前）
+    private var allPhotos: [Data] {
+        (photoData.map { [$0] } ?? []) + additionalPhotos
+    }
+
     // MARK: - Actions
 
     private func deleteItems(at offsets: IndexSet) {
@@ -213,6 +239,7 @@ struct MealEditView: View {
             meal.mealType = mealType.rawValue
             meal.date = date
             if let data = photoData { meal.photoData = data }
+            meal.additionalPhotos = additionalPhotos
             // 简单起见：全量替换菜品
             for old in meal.items { modelContext.delete(old) }
             for item in validItems { item.meal = meal }
@@ -224,6 +251,7 @@ struct MealEditView: View {
                 mealType: mealType,
                 name: trimmedName.isEmpty ? "未命名一餐" : trimmedName,
                 photoData: photoData,
+                additionalPhotos: additionalPhotos,
                 items: validItems
             )
             try? repository.insert(meal)

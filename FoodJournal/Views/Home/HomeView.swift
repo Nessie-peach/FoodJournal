@@ -25,10 +25,21 @@ struct HomeView: View {
     @State private var showSourceDialog = false
     @State private var showCamera = false
     @State private var showPhotoPicker = false
-    @State private var photoPickerItem: PhotosPickerItem?
+    @State private var photoPickerItems: [PhotosPickerItem] = []
 
-    /// 已压缩、待识别/待保存的照片 JPEG Data
-    @State private var pendingImageData: Data?
+    /// 单次拍摄/多选的照片上限
+    private static let maxPhotoCount = 5
+
+    /// 已压缩、待识别/待保存的照片 JPEG Data（首图在前）
+    @State private var pendingImages: [Data] = []
+
+    /// 照片确认页（拍摄/多选后进入，可补拍、删图、发起识别）
+    @State private var showConfirmSheet = false
+    /// 确认页 dismiss 后再拉起相机（避免 sheet 与 cover 同帧冲突）
+    @State private var showCameraAfterConfirmDismiss = false
+    /// 相机 dismiss 后再弹确认页（同上）
+    @State private var showConfirmAfterCameraDismiss = false
+
     @State private var isRecognizing = false
     @State private var recognitionTask: Task<Void, Never>?
 
@@ -118,15 +129,43 @@ struct HomeView: View {
                     Text("当前设备没有可用相机（模拟器），请从相册选择")
                 }
             }
-            .fullScreenCover(isPresented: $showCamera) {
+            .fullScreenCover(isPresented: $showCamera, onDismiss: {
+                // 相机拍完先 dismiss，再弹照片确认页（sheet 与 fullScreenCover 不能同帧呈现）
+                if showConfirmAfterCameraDismiss {
+                    showConfirmAfterCameraDismiss = false
+                    showConfirmSheet = true
+                }
+            }) {
                 CameraPicker { image in
                     handlePickedImage(image)
                 }
                 .ignoresSafeArea()
             }
-            .photosPicker(isPresented: $showPhotoPicker, selection: $photoPickerItem, matching: .images)
-            .onChange(of: photoPickerItem) { _, newItem in
-                loadPickedPhoto(newItem)
+            .photosPicker(isPresented: $showPhotoPicker, selection: $photoPickerItems, maxSelectionCount: Self.maxPhotoCount, matching: .images)
+            .onChange(of: photoPickerItems) { _, newItems in
+                guard !newItems.isEmpty else { return }
+                loadPickedPhotos(newItems)
+            }
+            .sheet(isPresented: $showConfirmSheet, onDismiss: {
+                // 确认页点「再拍一张」先收起 sheet，再拉起相机
+                if showCameraAfterConfirmDismiss {
+                    showCameraAfterConfirmDismiss = false
+                    showCamera = true
+                }
+            }) {
+                PhotoConfirmView(
+                    images: pendingImages,
+                    canAddMore: pendingImages.count < Self.maxPhotoCount,
+                    onRetake: {
+                        showCameraAfterConfirmDismiss = true
+                        showConfirmSheet = false
+                    },
+                    onComplete: { completeCapture() },
+                    onCancel: { showConfirmSheet = false },
+                    onDelete: { index in
+                        pendingImages.remove(at: index)
+                    }
+                )
             }
             .overlay {
                 if isRecognizing {
@@ -229,27 +268,48 @@ struct HomeView: View {
 
     // MARK: - 图片入口
 
-    /// 相册选图：异步载入 Data → UIImage 后进入统一识别流程
-    private func loadPickedPhoto(_ item: PhotosPickerItem?) {
-        guard let item else { return }
+    /// 相册多选：异步载入每张 → 压缩 → 追加后进入照片确认页
+    private func loadPickedPhotos(_ items: [PhotosPickerItem]) {
+        photoPickerItems = []
         Task {
-            if let data = try? await item.loadTransferable(type: Data.self),
-               let image = UIImage(data: data) {
-                handlePickedImage(image)
-            } else {
-                showImageLoadError = true
+            var loaded: [Data] = []
+            for item in items {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data),
+                   let compressed = ImageCompression.compress(image) {
+                    loaded.append(compressed)
+                }
             }
+            guard !loaded.isEmpty else {
+                showImageLoadError = true
+                return
+            }
+            appendPendingImages(loaded)
+            showConfirmSheet = true
         }
-        photoPickerItem = nil
     }
 
-    /// 拍照/相册共用入口：压缩 → 配置检查 → 发起识别
+    /// 拍照入口：压缩 → 追加；确认页在相机 dismiss 后弹出
     private func handlePickedImage(_ image: UIImage) {
         guard let data = ImageCompression.compress(image) else {
             showImageLoadError = true
             return
         }
-        pendingImageData = data
+        appendPendingImages([data])
+        showConfirmAfterCameraDismiss = true
+    }
+
+    /// 追加待处理照片（超过上限截断）
+    private func appendPendingImages(_ datas: [Data]) {
+        let space = Self.maxPhotoCount - pendingImages.count
+        guard space > 0 else { return }
+        pendingImages.append(contentsOf: datas.prefix(space))
+    }
+
+    /// 确认页「完成拍摄」：配置检查 → 发起识别（全部照片一次识别）
+    private func completeCapture() {
+        showConfirmSheet = false
+        guard !pendingImages.isEmpty else { return }
 
         let config = LLMProviderConfig(json: visionConfigJSON) ?? .default
         let apiKey = KeychainStore.vision.load()
@@ -263,23 +323,26 @@ struct HomeView: View {
     // MARK: - 识别流程
 
     private func startRecognition(config: LLMProviderConfig, apiKey: String) {
-        guard let data = pendingImageData, !isRecognizing else { return }
+        guard !pendingImages.isEmpty, !isRecognizing else { return }
+        let images = pendingImages
         isRecognizing = true
         recognitionTask = Task {
             do {
                 let result = try await VisionService().recognizeFood(
-                    imageData: data, config: config, apiKey: apiKey
+                    imageDatas: images, config: config, apiKey: apiKey
                 )
                 guard !Task.isCancelled else { return }
-                // 识别成功：立即跳编辑页（识别模式），焦点落餐名
+                // 识别成功：立即跳编辑页（识别模式），首图作封面、焦点落餐名
                 editRoute = EditRoute(
                     prefill: MealEditView.Prefill(
                         name: result.mealName,
                         items: result.items.map { MealEditView.ItemDraft(draft: $0) },
-                        photoData: data
+                        photoData: images.first,
+                        additionalPhotos: Array(images.dropFirst())
                     ),
                     focusName: true
                 )
+                pendingImages = []
             } catch is CancellationError {
                 // 用户取消，静默
             } catch let error as URLError where error.code == .cancelled {
@@ -296,6 +359,10 @@ struct HomeView: View {
         recognitionTask?.cancel()
         recognitionTask = nil
         isRecognizing = false
+        // 中途取消不丢已拍照片：回到照片确认页
+        if !pendingImages.isEmpty {
+            showConfirmSheet = true
+        }
     }
 
     private func retryRecognition() {
@@ -304,12 +371,18 @@ struct HomeView: View {
         startRecognition(config: config, apiKey: apiKey)
     }
 
-    /// 识别失败后改手动记录：仅保留照片预填，其余手动填
+    /// 识别失败后改手动记录：保留全部照片预填，其余手动填
     private func routeToManualEdit() {
         editRoute = EditRoute(
-            prefill: MealEditView.Prefill(name: "", items: [], photoData: pendingImageData),
+            prefill: MealEditView.Prefill(
+                name: "",
+                items: [],
+                photoData: pendingImages.first,
+                additionalPhotos: Array(pendingImages.dropFirst())
+            ),
             focusName: true
         )
+        pendingImages = []
     }
 
     // MARK: - 记录删除
@@ -401,6 +474,104 @@ private struct MealRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+// MARK: - 照片确认页
+
+/// 拍摄/多选后的照片确认页：横向缩略图列表（可左滑查看、单张删除）+ 补拍/完成。
+/// 中途取消（含识别中取消）不丢已拍照片。
+private struct PhotoConfirmView: View {
+    let images: [Data]
+    /// 未达上限时展示「再拍一张」
+    let canAddMore: Bool
+    let onRetake: () -> Void
+    let onComplete: () -> Void
+    let onCancel: () -> Void
+    let onDelete: (Int) -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                if images.isEmpty {
+                    emptyState
+                } else {
+                    thumbnailStrip
+                    Spacer()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle("已选 \(images.count)/5 张")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("取消") { onCancel() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成拍摄（\(images.count) 张）") { onComplete() }
+                        .disabled(images.isEmpty)
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if canAddMore && !images.isEmpty {
+                    Button {
+                        onRetake()
+                    } label: {
+                        Label("再拍一张", systemImage: "camera")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                }
+            }
+        }
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Text("还没有照片")
+        } description: {
+            Text("照片已全部删除，可取消后重新拍摄或从相册选择")
+        }
+    }
+
+    private var thumbnailStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(spacing: 12) {
+                ForEach(images.indices, id: \.self) { index in
+                    thumbnail(at: index)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+        }
+    }
+
+    private func thumbnail(at index: Int) -> some View {
+        VStack(spacing: 6) {
+            if let image = UIImage(data: images[index]) {
+                ZStack(alignment: .topTrailing) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 150, height: 190)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    Button {
+                        onDelete(index)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white, .black.opacity(0.55))
+                    }
+                    .offset(x: 6, y: -6)
+                    .accessibilityLabel("删除第 \(index + 1) 张照片")
+                }
+                Text(index == 0 ? "封面" : "第 \(index + 1) 张")
+                    .font(.caption2)
+                    .foregroundStyle(index == 0 ? .orange : .secondary)
+            }
+        }
     }
 }
 
