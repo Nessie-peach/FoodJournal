@@ -2,11 +2,21 @@ import SwiftUI
 import SwiftData
 import PhotosUI
 
-/// 首页：今日饮食记录列表 + 汇总 + 拍照识图入口
+/// 今日页：管住嘴（饮食记录）/ 迈开腿（健康数据占位）
 struct HomeView: View {
     @Environment(\.modelContext) private var modelContext
 
     @Query private var todayMeals: [Meal]
+    @Query private var weightRecords: [WeightRecord]
+
+    // MARK: - 今日页模式
+
+    private enum TodayMode: Hashable {
+        case diet
+        case exercise
+    }
+
+    @State private var selectedMode: TodayMode = .diet
 
     // MARK: - 识图流程状态
 
@@ -55,26 +65,20 @@ struct HomeView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    SummaryBar(meals: todayMeals)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
+            VStack(spacing: 0) {
+                Picker("今日模式", selection: $selectedMode) {
+                    Text("管住嘴").tag(TodayMode.diet)
+                    Text("迈开腿").tag(TodayMode.exercise)
                 }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
 
-                Section {
-                    ForEach(todayMeals) { meal in
-                        NavigationLink(value: meal.id) {
-                            MealRow(meal: meal)
-                        }
-                    }
-                    .onDelete(perform: deleteMeals)
-                } header: {
-                    Text("今日记录（\(todayMeals.count)）")
-                } footer: {
-                    if todayMeals.isEmpty {
-                        Text("还没有记录，点右上角 + 记一餐吧")
-                    }
+                switch selectedMode {
+                case .diet:
+                    dietList
+                case .exercise:
+                    exercisePlaceholder
                 }
             }
             .navigationTitle("今天吃什么")
@@ -151,6 +155,59 @@ struct HomeView: View {
                 SettingsView()
             }
         }
+    }
+
+    // MARK: - 管住嘴：今日饮食列表
+
+    private var dietList: some View {
+        List {
+            Section {
+                SummaryBar(meals: todayMeals)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+            }
+
+            Section {
+                ForEach(todayMeals) { meal in
+                    NavigationLink(value: meal.id) {
+                        MealRow(meal: meal)
+                    }
+                }
+                .onDelete(perform: deleteMeals)
+            } header: {
+                Text("今日记录（\(todayMeals.count)）")
+            } footer: {
+                if todayMeals.isEmpty {
+                    Text("还没有记录，点右上角 + 记一餐吧")
+                }
+            }
+
+            Section {
+                NavigationLink {
+                    WeightView()
+                } label: {
+                    WeightCard(summary: WeightCardSummary(records: weightRecords))
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
+        }
+    }
+
+    // MARK: - 迈开腿：健康数据占位
+
+    private var exercisePlaceholder: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "figure.run")
+                .font(.system(size: 56))
+                .foregroundStyle(.secondary)
+            Text("健康数据（消耗/睡眠/心率/HRV）将在下一阶段接入佳明后展示")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - 识别中遮罩
