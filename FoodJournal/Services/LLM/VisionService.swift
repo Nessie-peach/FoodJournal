@@ -47,22 +47,22 @@ enum VisionError: LocalizedError, Equatable {
 
 /// 拍照识图服务：OpenAI 兼容 chat/completions 视觉请求 + 结果解析。
 struct VisionService: Sendable {
-    /// 识图 system prompt（定稿，勿改动：含多份同类食物分开记录的要求与纯 JSON 输出约束）
+    /// 识图 system prompt（定稿，勿改动：多张照片/营养表口径 + 多份同类食物分开记录的要求与纯 JSON 输出约束）
     static let systemPrompt =
-        "你是食物识别助手。仔细清点照片中每种食物的数量，多份同类食物（如两个鸡腿）要分开记录或在名称中标注数量。只输出 JSON，格式 {\"mealName\":\"...\",\"items\":[{\"name\":\"...\",\"calories\":数字kcal,\"protein\":数字克,\"carbs\":数字克,\"fat\":数字克}]}，不要输出任何其他文字。"
+        "你是食物识别助手。用户提供的是同一餐食的一张或多张照片，可能包含食物的不同角度，也可能包含包装上的营养成分表。仔细清点每种食物的数量，多份同类食物要分开记录或在名称中标注数量。如果照片中包含营养成分表，优先按照营养表上的数值填写（注意区分\"每100克\"与\"每份\"的口径）。只输出 JSON，格式 {\"mealName\":\"...\",\"items\":[{\"name\":\"...\",\"calories\":数字kcal,\"protein\":数字克,\"carbs\":数字克,\"fat\":数字克}]}，不要输出任何其他文字。"
 
-    static let userText = "请识别这张餐食照片中的所有菜品，并按系统要求的 JSON 格式输出营养估算。"
+    static let userText = "请识别这些同一餐食照片中的所有菜品，并按系统要求的 JSON 格式输出营养估算。"
 
     /// 请求超时（秒）
     static let timeoutInterval: TimeInterval = 30
 
-    /// 识别餐食照片。
+    /// 识别餐食照片（支持同一餐食的多张照片：不同角度 / 包装营养成分表）。
     /// - Parameters:
-    ///   - imageData: JPEG 图片数据（建议先用 `ImageCompression.compress` 压缩）
+    ///   - imageDatas: JPEG 图片数据数组（建议先用 `ImageCompression.compress` 压缩，每张各自压缩）
     ///   - config: LLM 接入配置（BaseURL / 模型 ID）
     ///   - apiKey: API Key（仅用于 Authorization 头，绝不进入错误信息）
     func recognizeFood(
-        imageData: Data,
+        imageDatas: [Data],
         config: LLMProviderConfig,
         apiKey: String
     ) async throws -> MealRecognitionResult {
@@ -83,7 +83,7 @@ struct VisionService: Sendable {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: Self.makeRequestBody(
             config: config,
-            imageData: imageData
+            imageDatas: imageDatas
         ))
 
         let sessionConfiguration = URLSessionConfiguration.ephemeral
@@ -121,21 +121,22 @@ struct VisionService: Sendable {
         return try VisionResponseParser.parse(rawReply)
     }
 
-    /// 组装 OpenAI 兼容多模态请求体
-    private static func makeRequestBody(config: LLMProviderConfig, imageData: Data) -> [String: Any] {
-        [
+    /// 组装 OpenAI 兼容多模态请求体：单条 user 消息的 content 数组中放多个 image_url（每张各自转 data URI）+ 文本指令。
+    /// internal 以便单测直接验证请求体构造。
+    static func makeRequestBody(config: LLMProviderConfig, imageDatas: [Data]) -> [String: Any] {
+        let imageEntries = imageDatas.map { data in
+            [
+                "type": "image_url",
+                "image_url": ["url": ImageCompression.dataURI(from: data)],
+            ]
+        }
+        return [
             "model": config.modelID.trimmingCharacters(in: .whitespacesAndNewlines),
             "messages": [
                 ["role": "system", "content": systemPrompt],
                 [
                     "role": "user",
-                    "content": [
-                        [
-                            "type": "image_url",
-                            "image_url": ["url": ImageCompression.dataURI(from: imageData)],
-                        ],
-                        ["type": "text", "text": userText],
-                    ],
+                    "content": imageEntries + [["type": "text", "text": userText]],
                 ],
             ],
             // 关闭模型 thinking（实测提速 3.6 倍，见 docs/M2-thinking提速验证.md）。

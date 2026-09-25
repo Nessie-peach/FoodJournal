@@ -11,8 +11,10 @@ final class Meal {
     var mealType: String
     /// 餐名（如「麦当劳巨无霸套餐」）
     var name: String
-    /// 照片数据（可选）
+    /// 照片数据（可选）：首图/封面，列表展示用（兼容已有数据）
     var photoData: Data?
+    /// 其余照片（第一张之后的），如食物正面 + 包装营养成分表
+    var additionalPhotos: [Data]
     /// 包含的食物条目（级联删除）
     @Relationship(deleteRule: .cascade, inverse: \FoodItem.meal)
     var items: [FoodItem]
@@ -27,6 +29,7 @@ final class Meal {
         mealType: MealType,
         name: String,
         photoData: Data? = nil,
+        additionalPhotos: [Data] = [],
         items: [FoodItem] = []
     ) {
         self.id = id
@@ -34,7 +37,13 @@ final class Meal {
         self.mealType = mealType.rawValue
         self.name = name
         self.photoData = photoData
+        self.additionalPhotos = additionalPhotos
         self.items = items
+    }
+
+    /// 全部照片（首图在前）；首图空时其余照片顶上
+    var allPhotos: [Data] {
+        (photoData.map { [$0] } ?? []) + additionalPhotos
     }
 }
 
