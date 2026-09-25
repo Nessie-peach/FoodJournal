@@ -4,7 +4,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
+                Section("LLM 模型设置") {
                     Text("识图功能需选择支持视觉（图片输入）的模型；API Key 与所有配置仅存储在本机，不会上传到任何服务器。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -21,8 +21,15 @@ struct SettingsView: View {
                     storageKey: LLMProviderConfig.adviceStorageKey,
                     keychain: .advice
                 )
+
+                Section {
+                    Text("导出 / 导入功能将在后续版本提供")
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("数据管理（导出/导入，后续版本提供）")
+                }
             }
-            .navigationTitle("设置")
+            .navigationTitle("我的")
         }
     }
 }
