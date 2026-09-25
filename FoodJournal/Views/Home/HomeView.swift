@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 import PhotosUI
 
-/// 今日页：管住嘴（饮食记录）/ 迈开腿（健康数据占位）
+/// 今日页：管住嘴（饮食记录）/ 迈开腿（当日健康快照卡片）
 struct HomeView: View {
     @Environment(\.modelContext) private var modelContext
 
@@ -116,7 +116,7 @@ struct HomeView: View {
             case .diet:
                 dietList
             case .exercise:
-                exercisePlaceholder
+                ExerciseView(selectedTab: $selectedTab)
             }
         }
         .navigationTitle("")
@@ -293,22 +293,6 @@ struct HomeView: View {
                 .listRowBackground(Color.clear)
             }
         }
-    }
-
-    // MARK: - 迈开腿：健康数据占位
-
-    private var exercisePlaceholder: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "figure.run")
-                .font(.system(size: 56))
-                .foregroundStyle(.secondary)
-            Text("健康数据（消耗/睡眠/心率/HRV）将在下一阶段接入佳明后展示")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - 识别中遮罩
