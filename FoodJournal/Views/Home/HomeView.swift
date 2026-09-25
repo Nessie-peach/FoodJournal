@@ -22,7 +22,6 @@ struct HomeView: View {
 
     @AppStorage(LLMProviderConfig.visionStorageKey) private var visionConfigJSON: String = LLMProviderConfig.default.asJSON
 
-    @State private var showSourceDialog = false
     @State private var showCamera = false
     @State private var showPhotoPicker = false
     @State private var photoPickerItems: [PhotosPickerItem] = []
@@ -35,10 +34,10 @@ struct HomeView: View {
 
     /// 照片确认页（拍摄/多选后进入，可补拍、删图、发起识别）
     @State private var showConfirmSheet = false
-    /// 确认页 dismiss 后再拉起相机（避免 sheet 与 cover 同帧冲突）
-    @State private var showCameraAfterConfirmDismiss = false
-    /// 相机 dismiss 后再弹确认页（同上）
-    @State private var showConfirmAfterCameraDismiss = false
+    /// 确认页内补拍的相机（以确认页 sheet 为宿主呈现，取消/成功都回落到确认页）
+    @State private var showRetakeCamera = false
+    /// 入口相机本次是否拍到照片（用于 dismiss 后按状态机决定落点）
+    @State private var entryCameraDidCapture = false
 
     @State private var isRecognizing = false
     @State private var recognitionTask: Task<Void, Never>?
@@ -76,97 +75,132 @@ struct HomeView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                switch selectedMode {
-                case .diet:
-                    dietList
-                case .exercise:
-                    exercisePlaceholder
+            captureFlowPresentations(content: mainPage)
+                .sheet(isPresented: $showSettings) {
+                    SettingsView()
                 }
+        }
+    }
+
+    // MARK: - 主页面（内容 + 弹窗）
+
+    private var mainPage: some View {
+        recognitionAlerts(content: todayContent)
+    }
+
+    private var todayContent: some View {
+        VStack(spacing: 0) {
+            switch selectedMode {
+            case .diet:
+                dietList
+            case .exercise:
+                exercisePlaceholder
             }
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(for: UUID.self) { id in
-                if let meal = todayMeals.first(where: { $0.id == id }) {
-                    MealEditView(meal: meal)
-                }
+        }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(for: UUID.self) { id in
+            if let meal = todayMeals.first(where: { $0.id == id }) {
+                MealEditView(meal: meal)
             }
-            .navigationDestination(item: $editRoute) { route in
-                MealEditView(prefill: route.prefill, focusNameOnAppear: route.focusName)
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        showSourceDialog = true
-                    } label: {
-                        Image(systemName: "camera.fill")
-                    }
-                    .accessibilityLabel("拍照识别")
-                }
-                ToolbarItem(placement: .principal) {
-                    Picker("今日模式", selection: $selectedMode) {
-                        Text("管住嘴").tag(TodayMode.diet)
-                        Text("迈开腿").tag(TodayMode.exercise)
-                    }
-                    .pickerStyle(.segmented)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        MealEditView()
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .accessibilityLabel("新增一餐")
-                }
-            }
-            .confirmationDialog("拍照识别", isPresented: $showSourceDialog, titleVisibility: .visible) {
+        }
+        .navigationDestination(item: $editRoute) { route in
+            MealEditView(prefill: route.prefill, focusNameOnAppear: route.focusName)
+        }
+        .toolbar { toolbarItems }
+    }
+
+    // MARK: - 顶栏
+
+    @ToolbarContentBuilder
+    private var toolbarItems: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Menu {
                 Button("拍照") { showCamera = true }
                     .disabled(!cameraAvailable)
                 Button("从相册选择") { showPhotoPicker = true }
-                Button("取消", role: .cancel) {}
-            } message: {
-                if !cameraAvailable {
-                    Text("当前设备没有可用相机（模拟器），请从相册选择")
-                }
+            } label: {
+                Image(systemName: "camera.fill")
             }
+            .accessibilityLabel("拍照识别")
+        }
+        ToolbarItem(placement: .principal) {
+            Picker("今日模式", selection: $selectedMode) {
+                Text("管住嘴").tag(TodayMode.diet)
+                Text("迈开腿").tag(TodayMode.exercise)
+            }
+            .pickerStyle(.segmented)
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            NavigationLink {
+                MealEditView()
+            } label: {
+                Image(systemName: "plus")
+            }
+            .accessibilityLabel("新增一餐")
+        }
+    }
+
+    // MARK: - 拍摄流程呈现链
+
+    /// 入口相机（fullScreenCover）→ 相册多选 → 照片确认页（sheet，内含补拍相机）
+    private func captureFlowPresentations(content: some View) -> some View {
+        content
             .fullScreenCover(isPresented: $showCamera, onDismiss: {
-                // 相机拍完先 dismiss，再弹照片确认页（sheet 与 fullScreenCover 不能同帧呈现）
-                if showConfirmAfterCameraDismiss {
-                    showConfirmAfterCameraDismiss = false
+                // 入口相机 dismiss 后按状态机落点：拍到照片 → 确认页；取消 → 主界面
+                if CaptureFlowLogic.destinationAfterCameraDismiss(
+                    entryPoint: .entry, didCaptureImage: entryCameraDidCapture
+                ) == .confirmSheet {
                     showConfirmSheet = true
                 }
+                entryCameraDidCapture = false
             }) {
                 CameraPicker { image in
-                    handlePickedImage(image)
+                    handlePickedImage(image, from: .entry)
                 }
                 .ignoresSafeArea()
             }
-            .photosPicker(isPresented: $showPhotoPicker, selection: $photoPickerItems, maxSelectionCount: Self.maxPhotoCount, matching: .images)
+            .photosPicker(
+                isPresented: $showPhotoPicker,
+                selection: $photoPickerItems,
+                maxSelectionCount: Self.maxPhotoCount,
+                matching: .images
+            )
             .onChange(of: photoPickerItems) { _, newItems in
                 guard !newItems.isEmpty else { return }
                 loadPickedPhotos(newItems)
             }
-            .sheet(isPresented: $showConfirmSheet, onDismiss: {
-                // 确认页点「再拍一张」先收起 sheet，再拉起相机
-                if showCameraAfterConfirmDismiss {
-                    showCameraAfterConfirmDismiss = false
-                    showCamera = true
-                }
-            }) {
-                PhotoConfirmView(
-                    images: pendingImages,
-                    canAddMore: pendingImages.count < Self.maxPhotoCount,
-                    onRetake: {
-                        showCameraAfterConfirmDismiss = true
-                        showConfirmSheet = false
-                    },
-                    onComplete: { completeCapture() },
-                    onCancel: { showConfirmSheet = false },
-                    onDelete: { index in
-                        pendingImages.remove(at: index)
-                    }
-                )
+            .sheet(isPresented: $showConfirmSheet) {
+                photoConfirmSheet
             }
+    }
+
+    /// 照片确认页 + 叠在其上的补拍相机：
+    /// sheet 保持呈现，相机取消（X）只收起相机，已拍照片全部保留
+    private var photoConfirmSheet: some View {
+        PhotoConfirmView(
+            images: pendingImages,
+            canAddMore: pendingImages.count < Self.maxPhotoCount,
+            onRetake: { showRetakeCamera = true },
+            onComplete: { completeCapture() },
+            onCancel: { showConfirmSheet = false },
+            onDelete: { index in
+                pendingImages.remove(at: index)
+            }
+        )
+        .fullScreenCover(isPresented: $showRetakeCamera) {
+            CameraPicker { image in
+                handlePickedImage(image, from: .retake)
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    // MARK: - 识别相关弹窗
+
+    @ViewBuilder
+    private func recognitionAlerts(content: some View) -> some View {
+        content
             .overlay {
                 if isRecognizing {
                     recognizingOverlay
@@ -190,10 +224,6 @@ struct HomeView: View {
             } message: {
                 Text("所选图片无法读取或处理，请换一张试试")
             }
-            .sheet(isPresented: $showSettings) {
-                SettingsView()
-            }
-        }
     }
 
     // MARK: - 管住嘴：今日饮食列表
@@ -289,14 +319,16 @@ struct HomeView: View {
         }
     }
 
-    /// 拍照入口：压缩 → 追加；确认页在相机 dismiss 后弹出
-    private func handlePickedImage(_ image: UIImage) {
+    /// 拍照入口：压缩 → 追加；入口相机 dismiss 后按状态机进入确认页
+    private func handlePickedImage(_ image: UIImage, from entryPoint: CaptureFlowLogic.CameraEntryPoint) {
         guard let data = ImageCompression.compress(image) else {
             showImageLoadError = true
             return
         }
         appendPendingImages([data])
-        showConfirmAfterCameraDismiss = true
+        if entryPoint == .entry {
+            entryCameraDidCapture = true
+        }
     }
 
     /// 追加待处理照片（超过上限截断）
