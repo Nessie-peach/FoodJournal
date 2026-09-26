@@ -7,10 +7,13 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6"
-    MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "1.1"
+    CURRENT_PROJECT_VERSION: "2"
     PRODUCT_NAME: "$(TARGET_NAME)"
     ALWAYS_SEARCH_USER_PATHS: "NO"
+    # 签名：写在这里，避免每次 xcodegen 重新生成工程后 Xcode 里配的 Team 丢失
+    DEVELOPMENT_TEAM: "967ML7R2U8"
+    CODE_SIGN_STYLE: Automatic
   configs:
     debug:
       ENABLE_TESTABILITY: "YES"
