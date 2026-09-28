@@ -3,23 +3,46 @@ import HealthKit
 import SwiftData
 
 /// HealthKit 读取授权状态。
-/// 注意：HealthKit 出于隐私不暴露「读取授权成功」——读取类型的
-/// authorizationStatus 只会是 notDetermined 或 sharingDenied。
-/// 因此用「是否已请求过授权」辅助判断：已请求且未被拒绝即视为已授权。
-enum HealthAuthorizationState {
+/// 注意：HealthKit 出于隐私不暴露「读取授权成功」——读取授权不可查询，
+/// 只能靠「授权请求是否仍待请求」以及「查询是否返回数据」反推。
+/// 因此这里只有两态，且 .requested 只表示请求流程已走完，不代表读取真的被允许。
+enum HealthAuthorizationState: Equatable {
+    /// 尚未发起过授权请求（系统返回 .shouldRequest 或探测抛错）
     case notDetermined
-    case denied
-    case authorized
+    /// 已发起过授权请求（系统返回 .unnecessary）；是否真能读到数据仍需靠查询结果判断
+    case requested
+}
+
+/// 授权请求状态的探测抽象：便于单测注入假实现，避免测试依赖真实 HealthKit / 真机。
+@MainActor
+protocol HealthAuthorizationProbing {
+    /// 返回系统对「请求授权」的建议状态（HKAuthorizationRequestStatus）
+    func requestStatusForAuthorization() async throws -> HKAuthorizationRequestStatus
+}
+
+/// 默认探测实现：走真实 HKHealthStore（只读，不写入任何数据）。
+@MainActor
+struct HealthStoreAuthorizationProber: HealthAuthorizationProbing {
+    private let store = HKHealthStore()
+
+    func requestStatusForAuthorization() async throws -> HKAuthorizationRequestStatus {
+        try await store.statusForAuthorizationRequest(toShare: [], read: HealthKitService.readTypes)
+    }
 }
 
 /// HealthKit 服务层：授权请求、最近 N 天逐日聚合并写入 DailyHealthSnapshot。
 /// 只读（不写入任何数据）。所有 HealthKit 查询以 async 包装。
 @MainActor
 final class HealthKitService {
-    /// @AppStorage 标记：是否已弹出过授权请求（只弹一次）
-    static let authRequestedStorageKey = "hasRequestedHealthKitAuthorization"
+    /// 授权状态探测器（可注入，默认走真实 HealthKit）
+    private let prober: HealthAuthorizationProbing
 
+    /// 真实 HealthKit 查询用的 store
     private let store = HKHealthStore()
+
+    init(prober: HealthAuthorizationProbing = HealthStoreAuthorizationProber()) {
+        self.prober = prober
+    }
 
     /// 读取类型：活动热量、睡眠、心率、HRV(SDNN)、运动记录
     static let readTypes: Set<HKObjectType> = [
@@ -36,14 +59,17 @@ final class HealthKitService {
 
     // MARK: - 授权
 
-    func authorizationState(hasRequestedBefore: Bool) -> HealthAuthorizationState {
-        guard HKHealthStore.isHealthDataAvailable() else { return .notDetermined }
-        let statuses = Self.readTypes.map { store.authorizationStatus(for: $0) }
-        if statuses.contains(.sharingDenied) { return .denied }
-        if !hasRequestedBefore, statuses.allSatisfy({ $0 == .notDetermined }) {
+    /// 读取授权状态：HealthKit 不告知读取授权结果，故用「授权请求状态」反推。
+    /// - .shouldRequest → .notDetermined（尚未请求）
+    /// - .unnecessary 或其它值 → .requested（请求流程已走完）
+    /// - 探测抛错（如设备不支持健康数据）→ .notDetermined
+    func authorizationState() async -> HealthAuthorizationState {
+        do {
+            let status = try await prober.requestStatusForAuthorization()
+            return status == .unnecessary ? .requested : .notDetermined
+        } catch {
             return .notDetermined
         }
-        return .authorized
     }
 
     func requestAuthorization() async throws {
@@ -58,17 +84,31 @@ final class HealthKitService {
 
     // MARK: - 同步
 
+    /// 同步结果：成功写入天数 + 是否读到任何数据，供 UI 反馈。
+    struct HealthSyncOutcome {
+        let daysWritten: Int
+        let hasAnyData: Bool
+    }
+
     /// 对最近 N 天（含今天）逐日聚合并 upsert 到 DailyHealthSnapshot。
-    /// 未授权时直接跳过。全天所有数据均缺失时不创建/更新该天快照。
-    func syncRecent(days: Int = 7, context: ModelContext) async {
-        guard HKHealthStore.isHealthDataAvailable() else { return }
-        let hasRequested = UserDefaults.standard.bool(forKey: Self.authRequestedStorageKey)
-        guard authorizationState(hasRequestedBefore: hasRequested) == .authorized else { return }
+    /// 尚未请求授权（.notDetermined）时直接跳过，不写快照。
+    /// 全天所有数据均缺失时不创建/更新该天快照。
+    @discardableResult
+    func syncRecent(days: Int = 7, context: ModelContext) async -> HealthSyncOutcome {
+        // 先探测授权状态（先于可用性判断，保证「未请求 → 不写入」的守卫可测试）
+        guard await authorizationState() == .requested else {
+            return HealthSyncOutcome(daysWritten: 0, hasAnyData: false)
+        }
+        guard HKHealthStore.isHealthDataAvailable() else {
+            return HealthSyncOutcome(daysWritten: 0, hasAnyData: false)
+        }
 
         let repository = HealthSnapshotRepository(context: context)
         let calendar = Calendar.current
         let now = Date()
         let syncedAt = now
+        var daysWritten = 0
+        var readAnyData = false
 
         for offset in stride(from: days - 1, through: 0, by: -1) {
             guard let day = calendar.date(byAdding: .day, value: -offset, to: now),
@@ -129,6 +169,7 @@ final class HealthKitService {
             let hasAnyData = activeKcal != nil || sleep.minutes > 0
                 || avgHR != nil || hrvMS != nil || !merged.isEmpty
             guard hasAnyData else { continue }
+            readAnyData = true
 
             do {
                 try repository.upsert(
@@ -142,10 +183,13 @@ final class HealthKitService {
                     workoutsJSON: workoutsJSON,
                     syncedAt: syncedAt
                 )
+                daysWritten += 1
             } catch {
                 continue // 单天失败不影响其余天
             }
         }
+
+        return HealthSyncOutcome(daysWritten: daysWritten, hasAnyData: readAnyData)
     }
 
     // MARK: - 可测试的纯函数

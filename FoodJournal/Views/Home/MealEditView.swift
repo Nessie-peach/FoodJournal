@@ -34,19 +34,32 @@ struct MealEditView: View {
         var proteinText: String
         var carbsText: String
         var fatText: String
+        /// 识别来源：official 时行内显示「官方」标记；手动新增为 nil
+        var source: String?
+        /// 用户是否手动改过营养数值（改过则不再显示「官方」标记）
+        var nutrientsEdited: Bool
 
-        init(name: String = "", calories: Double = 0, protein: Double = 0, carbs: Double = 0, fat: Double = 0) {
+        init(
+            name: String = "",
+            calories: Double = 0,
+            protein: Double = 0,
+            carbs: Double = 0,
+            fat: Double = 0,
+            source: String? = nil
+        ) {
             self.id = UUID()
             self.name = name
             self.caloriesText = NumberFormatting.inputText(calories)
             self.proteinText = NumberFormatting.inputText(protein)
             self.carbsText = NumberFormatting.inputText(carbs)
             self.fatText = NumberFormatting.inputText(fat)
+            self.source = source
+            self.nutrientsEdited = false
         }
 
         /// 由识图结果草稿构造（营养数值转输入框文本）
         init(draft: FoodItemDraft) {
-            self.init(name: draft.name, calories: draft.calories, protein: draft.protein, carbs: draft.carbs, fat: draft.fat)
+            self.init(name: draft.name, calories: draft.calories, protein: draft.protein, carbs: draft.carbs, fat: draft.fat, source: draft.source)
         }
     }
 
@@ -98,7 +111,7 @@ struct MealEditView: View {
         _additionalPhotos = State(initialValue: meal.additionalPhotos)
         _itemDrafts = State(initialValue: meal.items
             .sorted { $0.id.uuidString < $1.id.uuidString }
-            .map { ItemDraft(name: $0.name, calories: $0.calories, protein: $0.protein, carbs: $0.carbs, fat: $0.fat) })
+            .map { ItemDraft(name: $0.name, calories: $0.calories, protein: $0.protein, carbs: $0.carbs, fat: $0.fat, source: $0.source) })
         if itemDrafts.isEmpty { _itemDrafts = State(initialValue: [ItemDraft()]) }
     }
 
@@ -230,7 +243,8 @@ struct MealEditView: View {
                 calories: NumberParsing.parseOrZero(draft.caloriesText),
                 protein: NumberParsing.parseOrZero(draft.proteinText),
                 carbs: NumberParsing.parseOrZero(draft.carbsText),
-                fat: NumberParsing.parseOrZero(draft.fatText)
+                fat: NumberParsing.parseOrZero(draft.fatText),
+                source: draft.source
             )
         }
 
@@ -266,10 +280,26 @@ struct MealEditView: View {
 private struct ItemRow: View {
     @Binding var draft: MealEditView.ItemDraft
 
+    /// 识别来源为官方且用户未手动改过数值时显示「官方」标记
+    private var showOfficialBadge: Bool {
+        draft.source == "official" && !draft.nutrientsEdited
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("菜品名称", text: $draft.name)
-                .font(.body.weight(.medium))
+            HStack(spacing: 6) {
+                TextField("菜品名称", text: $draft.name)
+                    .font(.body.weight(.medium))
+                if showOfficialBadge {
+                    Text("官方")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.blue)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.blue.opacity(0.12)))
+                        .accessibilityLabel("数据来源为品牌官方或包装营养表")
+                }
+            }
 
             HStack(spacing: 8) {
                 nutrientField("热量", text: $draft.caloriesText, unit: "千卡", width: 74)
@@ -279,6 +309,11 @@ private struct ItemRow: View {
             }
         }
         .padding(.vertical, 2)
+        // 手动改过任一营养数值即视为估算，不再显示「官方」标记
+        .onChange(of: draft.caloriesText) { _, _ in draft.nutrientsEdited = true }
+        .onChange(of: draft.proteinText) { _, _ in draft.nutrientsEdited = true }
+        .onChange(of: draft.carbsText) { _, _ in draft.nutrientsEdited = true }
+        .onChange(of: draft.fatText) { _, _ in draft.nutrientsEdited = true }
     }
 
     private func nutrientField(_ label: String, text: Binding<String>, unit: String, width: CGFloat) -> some View {

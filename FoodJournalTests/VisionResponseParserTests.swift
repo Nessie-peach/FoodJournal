@@ -126,6 +126,30 @@ final class VisionResponseParserTests: XCTestCase {
         XCTAssertEqual(result.items[0].calories, 360)
     }
 
+    // MARK: - source 字段（R5-1 官方数据优先）
+
+    func testParseWithSourceOfficial() throws {
+        let reply = """
+        {"mealName":"下午茶","items":[{"name":"茉莉奶绿","calories":180,"protein":3,"carbs":28,"fat":6,"source":"official"}]}
+        """
+        let result = try VisionResponseParser.parse(reply)
+        XCTAssertEqual(result.items[0].source, "official")
+    }
+
+    func testParseMissingSourceDefaultsToNil() throws {
+        let result = try VisionResponseParser.parse(cleanJSON)
+        XCTAssertEqual(result.items.count, 1)
+        XCTAssertNil(result.items[0].source, "模型漏输出 source 时应为 nil")
+    }
+
+    func testParseUnknownSourceValueTolerated() throws {
+        let reply = """
+        {"mealName":"午餐","items":[{"name":"汉堡","calories":550,"protein":25,"carbs":45,"fat":30,"source":"brand-data"}]}
+        """
+        let result = try VisionResponseParser.parse(reply)
+        XCTAssertEqual(result.items[0].source, "brand-data", "未知 source 值应原样保留不丢信息")
+    }
+
     // MARK: - extractJSON 单测
 
     func testExtractJSONStripsFenceAndChatter() {

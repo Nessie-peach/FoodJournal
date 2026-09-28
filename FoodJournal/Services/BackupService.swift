@@ -59,7 +59,7 @@ struct ImportReport: Equatable {
 
 // MARK: - 备份载荷（不含 LLM 配置与 API Key；健康快照可从健康 App 重新同步，不导出）
 
-/// 单个菜品
+/// 单个菜品（source 为可选字段：旧备份文件无此键时可正常解码为 nil，向后兼容）
 struct FoodItemBackup: Codable, Equatable {
     var id: UUID
     var name: String
@@ -67,6 +67,7 @@ struct FoodItemBackup: Codable, Equatable {
     var protein: Double
     var carbs: Double
     var fat: Double
+    var source: String?
 }
 
 /// 一餐（照片以 base64 存储）
@@ -173,7 +174,8 @@ struct BackupService {
             items: meal.items.map {
                 FoodItemBackup(
                     id: $0.id, name: $0.name,
-                    calories: $0.calories, protein: $0.protein, carbs: $0.carbs, fat: $0.fat
+                    calories: $0.calories, protein: $0.protein, carbs: $0.carbs, fat: $0.fat,
+                    source: $0.source
                 )
             }
         )
@@ -245,6 +247,7 @@ struct BackupService {
                 FoodItem(
                     id: $0.id, name: $0.name,
                     calories: $0.calories, protein: $0.protein, carbs: $0.carbs, fat: $0.fat,
+                    source: $0.source,
                     meal: meal
                 )
             }

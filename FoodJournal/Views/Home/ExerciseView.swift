@@ -10,6 +10,9 @@ struct ExerciseView: View {
 
     @Query private var todaySnapshots: [DailyHealthSnapshot]
 
+    /// 授权状态（异步取一次）：用于区分空态是「未授权」还是「健康里没数据」
+    @State private var authState: HealthAuthorizationState = .notDetermined
+
     private var todaySnapshot: DailyHealthSnapshot? {
         todaySnapshots.first
     }
@@ -96,7 +99,7 @@ struct ExerciseView: View {
                 .foregroundStyle(.secondary)
             Text("暂无健康数据")
                 .font(.title3.weight(.semibold))
-            Text("请先在「我的-健康数据」完成授权，并确认佳明 Connect 已开启同步到苹果健康")
+            Text(emptyStateHint)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -104,7 +107,7 @@ struct ExerciseView: View {
             Button {
                 selectedTab = .settings
             } label: {
-                Label("去设置", systemImage: "person.crop.circle")
+                Label(emptyStateButtonTitle, systemImage: "person.crop.circle")
             }
             .buttonStyle(.borderedProminent)
         }
@@ -112,11 +115,29 @@ struct ExerciseView: View {
         .padding(.bottom, 32)
     }
 
+    /// 空态文案：未请求授权 → 引导去授权；已请求但无数据 → 指向健康数据源
+    private var emptyStateHint: String {
+        switch authState {
+        case .notDetermined:
+            return "请先到「我的 → 健康数据」完成授权"
+        case .requested:
+            return "健康里可能还没有数据，请确认佳明 Connect 已开启同步到苹果健康"
+        }
+    }
+
+    private var emptyStateButtonTitle: String {
+        authState == .notDetermined ? "去授权" : "去设置"
+    }
+
     // MARK: - 同步
 
-    /// 进入页面触发一次后台同步（未授权时 syncRecent 内部直接跳过，不弹授权）
+    /// 进入页面先取一次授权状态（供空态区分），再触发一次后台同步
+    ///（未请求授权时 syncRecent 内部直接跳过，不弹授权）
     private func triggerSync() {
-        Task { await syncNow() }
+        Task {
+            authState = await HealthKitService().authorizationState()
+            await syncNow()
+        }
     }
 
     private func syncNow() async {

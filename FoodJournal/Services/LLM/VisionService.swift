@@ -17,6 +17,8 @@ struct FoodItemDraft: Equatable, Sendable {
     var carbs: Double
     /// g
     var fat: Double
+    /// 营养数据来源：official 表示品牌官方/包装营养表，estimate 表示估算；模型可能漏输出，为 nil
+    var source: String?
 }
 
 /// 识图流程错误（分类风格与 LLMClient.ConnectionError 一致；绝不包含 API Key）。
@@ -47,11 +49,18 @@ enum VisionError: LocalizedError, Equatable {
 
 /// 拍照识图服务：OpenAI 兼容 chat/completions 视觉请求 + 结果解析。
 struct VisionService: Sendable {
-    /// 识图 system prompt（定稿，勿改动：多张照片/营养表口径 + 多份同类食物分开记录的要求与纯 JSON 输出约束）
+    /// 识图 system prompt（定稿，勿改动：多张照片/营养表口径/备注优先采信 + 连锁品牌官方数据 + 多份同类食物分开记录 + source 字段 + 纯 JSON 输出约束）
     static let systemPrompt =
-        "你是食物识别助手。用户提供的是同一餐食的一张或多张照片，可能包含食物的不同角度，也可能包含包装上的营养成分表。仔细清点每种食物的数量，多份同类食物要分开记录或在名称中标注数量。如果照片中包含营养成分表，优先按照营养表上的数值填写（注意区分\"每100克\"与\"每份\"的口径）。只输出 JSON，格式 {\"mealName\":\"...\",\"items\":[{\"name\":\"...\",\"calories\":数字kcal,\"protein\":数字克,\"carbs\":数字克,\"fat\":数字克}]}，不要输出任何其他文字。"
+        "你是食物识别助手。用户提供的是同一餐食的一张或多张照片，可能包含食物的不同角度，也可能包含包装上的营养成分表，还可能附带文字备注（备注信息优先采信）。仔细清点每种食物的数量，多份同类食物要分开记录或在名称中标注数量。如果照片中包含营养成分表，优先按照营养表上的数值填写（注意区分\"每100克\"与\"每份\"的口径）。若识别为连锁品牌的具体商品（如茶百道、蜜雪冰城、瑞幸、麦当劳等），先辨别具体品类与规格（饮品需辨别糖度与杯型），并优先依据该品牌官方公布的营养数据作答。只输出 JSON，格式 {\"mealName\":\"...\",\"items\":[{\"name\":\"...\",\"calories\":数字kcal,\"protein\":数字克,\"carbs\":数字克,\"fat\":数字克,\"source\":\"official或estimate\"}]}，source 填 official 表示依据品牌官方或包装营养表数据，estimate 表示估算；不要输出任何其他文字。"
 
-    static let userText = "请识别这些同一餐食照片中的所有菜品，并按系统要求的 JSON 格式输出营养估算。"
+    static let defaultUserText = "请识别这些同一餐食照片中的所有菜品，并按系统要求的 JSON 格式输出营养估算。"
+
+    /// user 消息文本：备注非空时拼接备注并要求优先采信；空白备注视为未填写
+    static func userText(remark: String?) -> String {
+        let trimmed = remark?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return defaultUserText }
+        return "用户备注：\(trimmed)（识别时请优先采信备注信息）。请识别照片中的所有菜品，并按系统要求的 JSON 格式输出营养估算。"
+    }
 
     /// 请求超时（秒）
     static let timeoutInterval: TimeInterval = 30
@@ -59,10 +68,12 @@ struct VisionService: Sendable {
     /// 识别餐食照片（支持同一餐食的多张照片：不同角度 / 包装营养成分表）。
     /// - Parameters:
     ///   - imageDatas: JPEG 图片数据数组（建议先用 `ImageCompression.compress` 压缩，每张各自压缩）
+    ///   - remark: 用户拍后备注（可空，非空时优先采信）
     ///   - config: LLM 接入配置（BaseURL / 模型 ID）
     ///   - apiKey: API Key（仅用于 Authorization 头，绝不进入错误信息）
     func recognizeFood(
         imageDatas: [Data],
+        remark: String? = nil,
         config: LLMProviderConfig,
         apiKey: String
     ) async throws -> MealRecognitionResult {
@@ -83,7 +94,8 @@ struct VisionService: Sendable {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: Self.makeRequestBody(
             config: config,
-            imageDatas: imageDatas
+            imageDatas: imageDatas,
+            remark: remark
         ))
 
         let sessionConfiguration = URLSessionConfiguration.ephemeral
@@ -123,7 +135,11 @@ struct VisionService: Sendable {
 
     /// 组装 OpenAI 兼容多模态请求体：单条 user 消息的 content 数组中放多个 image_url（每张各自转 data URI）+ 文本指令。
     /// internal 以便单测直接验证请求体构造。
-    static func makeRequestBody(config: LLMProviderConfig, imageDatas: [Data]) -> [String: Any] {
+    static func makeRequestBody(
+        config: LLMProviderConfig,
+        imageDatas: [Data],
+        remark: String? = nil
+    ) -> [String: Any] {
         let imageEntries = imageDatas.map { data in
             [
                 "type": "image_url",
@@ -136,7 +152,7 @@ struct VisionService: Sendable {
                 ["role": "system", "content": systemPrompt],
                 [
                     "role": "user",
-                    "content": imageEntries + [["type": "text", "text": userText]],
+                    "content": imageEntries + [["type": "text", "text": userText(remark: remark)]],
                 ],
             ],
             // 关闭模型 thinking（实测提速 3.6 倍，见 docs/M2-thinking提速验证.md）。
@@ -264,9 +280,10 @@ private struct TolerantRecognitionResult: Decodable {
         @FlexibleDouble var protein: Double = 0
         @FlexibleDouble var carbs: Double = 0
         @FlexibleDouble var fat: Double = 0
+        var source: String?
 
         private enum CodingKeys: String, CodingKey {
-            case name, calories, protein, carbs, fat
+            case name, calories, protein, carbs, fat, source
         }
 
         init() {
@@ -280,6 +297,8 @@ private struct TolerantRecognitionResult: Decodable {
             protein = (try? container.decodeIfPresent(FlexibleDouble.self, forKey: .protein))?.wrappedValue ?? 0
             carbs = (try? container.decodeIfPresent(FlexibleDouble.self, forKey: .carbs))?.wrappedValue ?? 0
             fat = (try? container.decodeIfPresent(FlexibleDouble.self, forKey: .fat))?.wrappedValue ?? 0
+            // source 可选（模型可能漏输出）；未知值原样保留，UI 只对 official 显示标记
+            source = (try? container.decodeIfPresent(String.self, forKey: .source)) ?? nil
         }
     }
 
@@ -305,7 +324,8 @@ private struct TolerantRecognitionResult: Decodable {
                     calories: $0.calories,
                     protein: $0.protein,
                     carbs: $0.carbs,
-                    fat: $0.fat
+                    fat: $0.fat,
+                    source: $0.source
                 )
             }
         )
