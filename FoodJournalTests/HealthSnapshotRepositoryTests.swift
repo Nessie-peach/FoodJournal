@@ -67,6 +67,27 @@ final class HealthSnapshotRepositoryTests: XCTestCase {
         XCTAssertEqual(try repository.snapshot(for: day)?.activeKcal, 700)
     }
 
+    func testUpsertPersistsRestingKcal() throws {
+        let day = TestSupport.date(y: 9, d: 22, hour: 10)
+        let snapshot = try repository.upsert(
+            date: day,
+            activeKcal: 320,
+            restingKcal: 1280,
+            sleepMinutes: 400,
+            avgHR: 60,
+            hrvMS: nil,
+            syncedAt: day
+        )
+        XCTAssertEqual(snapshot.restingKcal, 1280, accuracy: 0.001)
+
+        // 未显式传入时默认 0（兼容旧调用/旧数据轻量迁移）
+        let day2 = TestSupport.date(y: 9, d: 23, hour: 10)
+        let legacy = try repository.upsert(
+            date: day2, activeKcal: 100, sleepMinutes: 400, avgHR: 60, hrvMS: 40, syncedAt: day2
+        )
+        XCTAssertEqual(legacy.restingKcal, 0)
+    }
+
     func testUpsertDifferentDaysInsertSeparately() throws {
         let day1 = TestSupport.date(y: 9, d: 22, hour: 10)
         let day2 = TestSupport.date(y: 9, d: 23, hour: 10)
