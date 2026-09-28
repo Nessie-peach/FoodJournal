@@ -164,7 +164,8 @@ struct VisionService: Sendable {
     }
 
     /// 从 chat/completions 响应中取出 choices[0].message.content
-    private static func extractReplyContent(from data: Data) throws -> String {
+    /// internal 以便 AIEditService 复用（同为 chat/completions 纯文本响应）
+    static func extractReplyContent(from data: Data) throws -> String {
         struct Response: Decodable {
             struct Choice: Decodable {
                 struct Message: Decodable {
