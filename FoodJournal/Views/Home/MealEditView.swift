@@ -25,6 +25,7 @@ struct MealEditView: View {
     @State private var mealType: MealType = .lunch
     @State private var date: Date = .now
     @State private var itemDrafts: [ItemDraft] = []
+    @State private var showAISheet = false
 
     /// 菜品行草稿：文本输入便于实时编辑，保存时解析
     struct ItemDraft: Identifiable, Hashable {
@@ -200,6 +201,13 @@ struct MealEditView: View {
         }
         .navigationTitle(editingMeal == nil ? "记一餐" : "编辑一餐")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showAISheet) {
+            MealAISheet(
+                currentName: name,
+                currentItemDrafts: itemDrafts,
+                onApply: { result in applyAIResult(result) }
+            )
+        }
         .task {
             // 识别模式：延迟 0.3s 激活焦点，避免与 push 导航动画抢焦点
             if focusNameOnAppear {
@@ -208,10 +216,28 @@ struct MealEditView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showAISheet = true
+                } label: {
+                    Label("AI 修改", systemImage: "wand.and.stars")
+                }
+                .accessibilityLabel("用 AI 指令修改本餐记录")
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("保存") { save() }
             }
         }
+    }
+
+    /// 把 AI 修改结果写回编辑页字段（餐名 + 菜品明细整体替换），不自动保存
+    private func applyAIResult(_ result: MealRecognitionResult) {
+        if !result.mealName.trimmingCharacters(in: .whitespaces).isEmpty {
+            name = result.mealName
+        }
+        var drafts = result.items.map { ItemDraft(draft: $0) }
+        if drafts.isEmpty { drafts = [ItemDraft()] }
+        itemDrafts = drafts
     }
 
     // MARK: - 照片
@@ -359,6 +385,305 @@ private struct TotalsRow: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
+        }
+    }
+}
+
+// MARK: - AI 修改弹层（R5-2）
+
+/// 「AI 修改」弹层：当前餐摘要 + 自然语言指令输入 + 逐轮变更摘要，支持多轮，应用时整体写回。
+private struct MealAISheet: View {
+    let currentName: String
+    let currentItemDrafts: [MealEditView.ItemDraft]
+    /// 应用：把最新结果写回编辑页（不自动保存）
+    let onApply: (MealRecognitionResult) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage(LLMProviderConfig.adviceStorageKey) private var adviceConfigJSON: String = ""
+
+    /// 一轮 AI 修改记录
+    struct Round: Identifiable {
+        let id = UUID()
+        let instruction: String
+        let changes: [MealItemChange]
+        let mealNameChanged: Bool
+        let result: MealRecognitionResult
+        let resultJSON: String
+    }
+
+    @State private var rounds: [Round] = []
+    @State private var inputText = ""
+    @State private var isGenerating = false
+    @State private var errorMessage: String?
+    @State private var showSettings = false
+    @FocusState private var inputFocused: Bool
+    @State private var generateTask: Task<Void, Never>?
+
+    private var adviceConfig: LLMProviderConfig {
+        LLMProviderConfig(json: adviceConfigJSON) ?? .default
+    }
+
+    /// 建议模型是否可用（端点 + 模型 + Key 均已配置）
+    private var isConfigured: Bool {
+        adviceConfig.isEndpointConfigured
+            && adviceConfig.isModelConfigured
+            && KeychainStore.advice.hasStoredKey
+    }
+
+    /// 编辑页当前状态快照（首轮的修改基准）
+    private var snapshot: MealRecognitionResult {
+        MealRecognitionResult(
+            mealName: currentName,
+            items: currentItemDrafts.map { draft in
+                FoodItemDraft(
+                    name: draft.name,
+                    calories: NumberParsing.parseOrZero(draft.caloriesText),
+                    protein: NumberParsing.parseOrZero(draft.proteinText),
+                    carbs: NumberParsing.parseOrZero(draft.carbsText),
+                    fat: NumberParsing.parseOrZero(draft.fatText),
+                    source: draft.source
+                )
+            }
+        )
+    }
+
+    /// 最新结果（未生成过时为编辑页快照）
+    private var latestResult: MealRecognitionResult {
+        rounds.last?.result ?? snapshot
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if !isConfigured {
+                    unconfiguredView
+                } else {
+                    content
+                }
+            }
+            .navigationTitle("AI 修改")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("关闭") { dismiss() }
+                }
+            }
+        }
+        .onDisappear {
+            generateTask?.cancel()
+        }
+    }
+
+    // MARK: 未配置建议模型
+
+    private var unconfiguredView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            Text("尚未配置建议模型")
+                .font(.headline)
+            Text("请先在「我的」页配置建议模型的 BaseURL、模型 ID 与 API Key")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("前往「我的」配置") {
+                showSettings = true
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding()
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+        }
+    }
+
+    // MARK: 主内容
+
+    private var content: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    summarySection
+                    ForEach(rounds) { round in
+                        roundSection(round)
+                    }
+                    if isGenerating {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("AI 正在修改…")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("取消") {
+                                generateTask?.cancel()
+                            }
+                            .font(.subheadline)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    if let errorMessage {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                                .font(.subheadline)
+                                .foregroundStyle(.red)
+                            Button("重试") { send() }
+                                .font(.subheadline.weight(.medium))
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                .padding()
+            }
+
+            Divider()
+            inputBar
+        }
+        .safeAreaInset(edge: .bottom) {
+            if !rounds.isEmpty && !isGenerating {
+                applyBar
+            }
+        }
+    }
+
+    /// 当前餐摘要：餐名 + 菜品名列表
+    private var summarySection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("当前餐")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            let result = latestResult
+            Text(result.mealName.isEmpty ? "未命名一餐" : result.mealName)
+                .font(.headline)
+            if result.items.isEmpty {
+                Text("（无菜品）")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(result.items.map(\.name).joined(separator: "、"))
+                    .font(.subheadline)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
+        .accessibilityElement(children: .combine)
+    }
+
+    /// 单轮结果：指令 + 变更摘要
+    private func roundSection(_ round: Round) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(round.instruction, systemImage: "text.bubble")
+                .font(.subheadline.weight(.medium))
+            if round.changes.isEmpty && !round.mealNameChanged {
+                Text("AI 认为无需修改")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                if round.mealNameChanged {
+                    Text("餐名：\(currentName) → \(round.result.mealName)")
+                        .font(.subheadline)
+                }
+                ForEach(Array(round.changes.enumerated()), id: \.offset) { _, change in
+                    Text(change.summaryText)
+                        .font(.subheadline)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(.tertiarySystemBackground)))
+    }
+
+    /// 输入框 + 发送
+    private var inputBar: some View {
+        HStack(spacing: 8) {
+            TextField("如：这一整杯都是我喝的 / 米饭只吃了一半", text: $inputText, axis: .vertical)
+                .lineLimit(1...3)
+                .focused($inputFocused)
+                .onSubmit { send() }
+                .submitLabel(.send)
+                .disabled(isGenerating)
+            Button {
+                send()
+            } label: {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.title2)
+            }
+            .disabled(isGenerating || inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding()
+    }
+
+    /// 底部应用/取消栏
+    private var applyBar: some View {
+        HStack(spacing: 12) {
+            Button {
+                dismiss()
+            } label: {
+                Text("取消")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+
+            Button {
+                onApply(latestResult)
+                dismiss()
+            } label: {
+                Text("应用")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    // MARK: 发起修改
+
+    private func send() {
+        let instruction = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instruction.isEmpty, !isGenerating else { return }
+
+        let currentJSON = AIEditService.encodeJSON(latestResult)
+        let history = rounds.map { (instruction: $0.instruction, resultJSON: $0.resultJSON) }
+        let config = adviceConfig
+        let apiKey = KeychainStore.advice.load() ?? ""
+        let previousResult = latestResult
+
+        inputText = ""
+        errorMessage = nil
+        isGenerating = true
+
+        generateTask = Task {
+            do {
+                let result = try await AIEditService().reviseMeal(
+                    currentJSON: currentJSON,
+                    instruction: instruction,
+                    history: history,
+                    config: config,
+                    apiKey: apiKey
+                )
+                let resultJSON = AIEditService.encodeJSON(result)
+                let changes = MealDraftDiff.diffMealDrafts(old: previousResult.items, new: result.items)
+                let mealNameChanged = previousResult.mealName != result.mealName
+                guard !Task.isCancelled else { return }
+                rounds.append(Round(
+                    instruction: instruction,
+                    changes: changes,
+                    mealNameChanged: mealNameChanged,
+                    result: result,
+                    resultJSON: resultJSON
+                ))
+            } catch is CancellationError {
+                // 用户取消，静默恢复输入
+                inputText = instruction
+            } catch {
+                inputText = instruction
+                errorMessage = error.localizedDescription
+            }
+            isGenerating = false
         }
     }
 }
