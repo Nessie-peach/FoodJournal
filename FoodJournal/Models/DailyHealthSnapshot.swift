@@ -23,6 +23,8 @@ final class DailyHealthSnapshot {
     var date: Date
     /// 活动能量（kcal）
     var activeKcal: Double
+    /// 静息能量（kcal，基础代谢）；旧数据轻量迁移默认 0
+    var restingKcal: Double = 0
     /// 睡眠时长（分钟）
     var sleepMinutes: Double
     /// 当日最早入睡时间（可能缺失）
@@ -42,6 +44,7 @@ final class DailyHealthSnapshot {
         id: UUID = UUID(),
         date: Date = .now,
         activeKcal: Double,
+        restingKcal: Double = 0,
         sleepMinutes: Double,
         sleepStart: Date? = nil,
         sleepEnd: Date? = nil,
@@ -53,6 +56,7 @@ final class DailyHealthSnapshot {
         self.id = id
         self.date = date
         self.activeKcal = activeKcal
+        self.restingKcal = restingKcal
         self.sleepMinutes = sleepMinutes
         self.sleepStart = sleepStart
         self.sleepEnd = sleepEnd

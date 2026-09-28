@@ -44,9 +44,10 @@ final class HealthKitService {
         self.prober = prober
     }
 
-    /// 读取类型：活动热量、睡眠、心率、HRV(SDNN)、运动记录
+    /// 读取类型：活动热量、静息热量（基础代谢）、睡眠、心率、HRV(SDNN)、运动记录
     static let readTypes: Set<HKObjectType> = [
         HKQuantityType(.activeEnergyBurned),
+        HKQuantityType(.basalEnergyBurned),
         HKCategoryType(.sleepAnalysis),
         HKQuantityType(.heartRate),
         HKQuantityType(.heartRateVariabilitySDNN),
@@ -122,6 +123,12 @@ final class HealthKitService {
                 start: dayStart, end: dayEnd
             )
 
+            // 静息热量（基础代谢）：当日累计和；无数据为 nil（落库 0）
+            let restingKcal = await quantitySum(
+                HKQuantityType(.basalEnergyBurned), unit: .kilocalorie(),
+                start: dayStart, end: dayEnd
+            )
+
             // 心率均值 / HRV(SDNN) 均值；nil = 当日无样本
             let avgHR = await quantityAverage(
                 HKQuantityType(.heartRate), unit: HKUnit.count().unitDivided(by: .minute()),
@@ -166,7 +173,7 @@ final class HealthKitService {
             let workoutsJSON = Self.workoutsJSONString(merged)
 
             // 全天无任何数据：跳过，避免制造全零快照
-            let hasAnyData = activeKcal != nil || sleep.minutes > 0
+            let hasAnyData = activeKcal != nil || restingKcal != nil || sleep.minutes > 0
                 || avgHR != nil || hrvMS != nil || !merged.isEmpty
             guard hasAnyData else { continue }
             readAnyData = true
@@ -175,6 +182,7 @@ final class HealthKitService {
                 try repository.upsert(
                     date: day,
                     activeKcal: activeKcal ?? 0,
+                    restingKcal: restingKcal ?? 0,
                     sleepMinutes: sleep.minutes,
                     sleepStart: sleep.earliestStart,
                     sleepEnd: sleep.latestEnd,

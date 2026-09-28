@@ -11,6 +11,10 @@ struct HomeView: View {
 
     @Query private var todayMeals: [Meal]
     @Query private var weightRecords: [WeightRecord]
+    @Query private var todaySnapshots: [DailyHealthSnapshot]
+
+    /// 每日热量缺口目标（千卡），我的-目标 中设置
+    @AppStorage(CalorieGap.goalStorageKey) private var gapGoalKcal: Double = CalorieGap.defaultGoalKcal
 
     // MARK: - 备份提醒
 
@@ -93,6 +97,12 @@ struct HomeView: View {
         _todayMeals = Query(
             filter: #Predicate<Meal> { meal in
                 meal.date >= start && meal.date < end
+            },
+            sort: [SortDescriptor(\.date, order: .reverse)]
+        )
+        _todaySnapshots = Query(
+            filter: #Predicate<DailyHealthSnapshot> { snapshot in
+                snapshot.date >= start && snapshot.date < end
             },
             sort: [SortDescriptor(\.date, order: .reverse)]
         )
@@ -270,6 +280,16 @@ struct HomeView: View {
                 SummaryBar(meals: todayMeals)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
+            }
+
+            Section {
+                CalorieGapCard(
+                    totalBurnedKcal: todaySnapshots.first.map { $0.activeKcal + $0.restingKcal },
+                    consumedKcal: todayMeals.reduce(0) { $0 + $1.totalCalories },
+                    goalKcal: gapGoalKcal
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
 
             Section {
@@ -521,6 +541,131 @@ private struct SummaryBar: View {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - 热量缺口卡
+
+/// 今日热量缺口：总消耗（活动+静息）/ 已摄入 / 当前缺口 / 距目标 / 当量提示。
+/// 无当日快照时走「待同步」空态（其余行弱化）；@Query 快照与今日餐变化自动重算。
+private struct CalorieGapCard: View {
+    /// 当日总消耗（活动+静息，kcal）；nil = 未同步/无数据
+    let totalBurnedKcal: Double?
+    let consumedKcal: Double
+    let goalKcal: Double
+
+    private var result: CalorieGap.Result? {
+        CalorieGap.evaluate(
+            totalBurnedKcal: totalBurnedKcal, consumedKcal: consumedKcal, goalKcal: goalKcal
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("热量缺口")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            if let result {
+                normalRows(result)
+            } else {
+                pendingRows
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: 正常态
+
+    private func normalRows(_ result: CalorieGap.Result) -> some View {
+        let burned = Int((totalBurnedKcal ?? 0).rounded())
+        let consumed = Int(consumedKcal.rounded())
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 0) {
+                metric(value: burned, label: "今日总消耗")
+                metric(value: consumed, label: "已摄入")
+                metric(value: burned - consumed, label: "当前缺口")
+            }
+            goalLine(result.goalStatus)
+            hintLine(result.hint)
+        }
+    }
+
+    private func metric(value: Int, label: String) -> some View {
+        VStack(spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text("\(value)")
+                    .font(.title3.weight(.semibold))
+                    .monospacedDigit()
+                Text("千卡")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func goalLine(_ status: CalorieGap.GoalStatus) -> some View {
+        switch status {
+        case .belowGoal(let remaining):
+            Text("距目标：还差 \(Int(remaining.rounded())) 千卡达标")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        case .aboveGoal(let excess):
+            Text("距目标：已超出目标 \(Int(excess.rounded())) 千卡")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.green)
+        }
+    }
+
+    @ViewBuilder
+    private func hintLine(_ hint: CalorieGap.EquivalentHint) -> some View {
+        switch hint {
+        case .surplus(let name):
+            Text("已多留出约\(name)的缺口")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        case .goalReached:
+            Text("已达今日缺口目标，再吃将增加盈余")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        case .hidden:
+            EmptyView()
+        }
+    }
+
+    // MARK: 待同步空态（弱化）
+
+    private var pendingRows: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 0) {
+                pendingItem(value: "待同步", label: "今日总消耗")
+                pendingItem(value: "\(Int(consumedKcal.rounded()))", label: "已摄入")
+                pendingItem(value: "—", label: "当前缺口")
+            }
+            Text("健康数据待同步，同步后显示缺口进度")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private func pendingItem(value: String, label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.subheadline)
+                .monospacedDigit()
+                .foregroundStyle(.tertiary)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
     }

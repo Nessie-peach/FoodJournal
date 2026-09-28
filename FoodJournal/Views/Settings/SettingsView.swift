@@ -27,6 +27,8 @@ struct SettingsView: View {
                     keychain: .advice
                 )
 
+                GoalSection()
+
                 DataManagementSection(
                     modelContext: modelContext
                 )
@@ -34,6 +36,31 @@ struct SettingsView: View {
                 HealthDataSection()
             }
             .navigationTitle("我的")
+        }
+    }
+}
+
+// MARK: - 目标（每日热量缺口目标）
+
+private struct GoalSection: View {
+    @AppStorage(CalorieGap.goalStorageKey) private var goalKcal: Double = CalorieGap.defaultGoalKcal
+
+    var body: some View {
+        Section {
+            Stepper(value: $goalKcal, in: 0...2000, step: 50) {
+                HStack {
+                    Text("每日热量缺口目标")
+                    Spacer()
+                    Text("\(Int(goalKcal)) 千卡")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+        } header: {
+            Text("目标")
+        } footer: {
+            Text("每天希望「消耗 − 摄入」达到的热量差，用于管住嘴页的热量缺口卡。")
+                .font(.footnote)
         }
     }
 }

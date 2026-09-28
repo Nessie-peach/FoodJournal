@@ -10,6 +10,7 @@ protocol HealthSnapshotRepositoryProtocol {
     func upsert(
         date: Date,
         activeKcal: Double,
+        restingKcal: Double,
         sleepMinutes: Double,
         sleepStart: Date?,
         sleepEnd: Date?,
@@ -51,6 +52,7 @@ final class HealthSnapshotRepository: HealthSnapshotRepositoryProtocol {
     func upsert(
         date: Date,
         activeKcal: Double,
+        restingKcal: Double = 0,
         sleepMinutes: Double,
         sleepStart: Date? = nil,
         sleepEnd: Date? = nil,
@@ -61,6 +63,7 @@ final class HealthSnapshotRepository: HealthSnapshotRepositoryProtocol {
     ) throws -> DailyHealthSnapshot {
         if let existing = try snapshot(for: date) {
             existing.activeKcal = activeKcal
+            existing.restingKcal = restingKcal
             existing.sleepMinutes = sleepMinutes
             existing.sleepStart = sleepStart
             existing.sleepEnd = sleepEnd
@@ -74,6 +77,7 @@ final class HealthSnapshotRepository: HealthSnapshotRepositoryProtocol {
         let snapshot = DailyHealthSnapshot(
             date: date,
             activeKcal: activeKcal,
+            restingKcal: restingKcal,
             sleepMinutes: sleepMinutes,
             sleepStart: sleepStart,
             sleepEnd: sleepEnd,
