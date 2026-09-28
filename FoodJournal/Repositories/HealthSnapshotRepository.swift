@@ -20,7 +20,57 @@ protocol HealthSnapshotRepositoryProtocol {
         syncedAt: Date
     ) throws -> DailyHealthSnapshot
     func fetchAll() throws -> [DailyHealthSnapshot]
+    /// Garmin 专有字段字段级合并 upsert（不覆盖 HealthKit 字段）
+    @discardableResult
+    func upsertGarmin(date: Date, fields: GarminSnapshotFields, syncedAt: Date) throws -> DailyHealthSnapshot
     func delete(_ snapshot: DailyHealthSnapshot) throws
+}
+
+/// Garmin 快照字段（字段级合并写入，不触碰 HealthKit 写入的既有字段）
+struct GarminSnapshotFields {
+    var hrvLastNightAvg: Double?
+    var hrvWeeklyAvg: Double?
+    var hrvBaselineLow: Double?
+    var hrvBaselineHigh: Double?
+    var bodyBatteryCurrent: Int?
+    var stressAvg: Int?
+    var deepSleepMin: Double?
+    var remSleepMin: Double?
+    var sleepScore: Int?
+
+    init(from data: GarminDailyData) {
+        hrvLastNightAvg = data.hrvLastNightAvg
+        hrvWeeklyAvg = data.hrvWeeklyAvg
+        hrvBaselineLow = data.hrvBaselineLow
+        hrvBaselineHigh = data.hrvBaselineHigh
+        bodyBatteryCurrent = data.bodyBatteryCurrent
+        stressAvg = data.stressAvg.map { Int($0.rounded()) }
+        deepSleepMin = data.deepSleepMin
+        remSleepMin = data.remSleepMin
+        sleepScore = data.sleepScore
+    }
+
+    init(
+        hrvLastNightAvg: Double? = nil,
+        hrvWeeklyAvg: Double? = nil,
+        hrvBaselineLow: Double? = nil,
+        hrvBaselineHigh: Double? = nil,
+        bodyBatteryCurrent: Int? = nil,
+        stressAvg: Int? = nil,
+        deepSleepMin: Double? = nil,
+        remSleepMin: Double? = nil,
+        sleepScore: Int? = nil
+    ) {
+        self.hrvLastNightAvg = hrvLastNightAvg
+        self.hrvWeeklyAvg = hrvWeeklyAvg
+        self.hrvBaselineLow = hrvBaselineLow
+        self.hrvBaselineHigh = hrvBaselineHigh
+        self.bodyBatteryCurrent = bodyBatteryCurrent
+        self.stressAvg = stressAvg
+        self.deepSleepMin = deepSleepMin
+        self.remSleepMin = remSleepMin
+        self.sleepScore = sleepScore
+    }
 }
 
 @MainActor
@@ -94,6 +144,46 @@ final class HealthSnapshotRepository: HealthSnapshotRepositoryProtocol {
     func fetchAll() throws -> [DailyHealthSnapshot] {
         let descriptor = FetchDescriptor<DailyHealthSnapshot>(sortBy: [SortDescriptor(\.date)])
         return try context.fetch(descriptor)
+    }
+
+    /// Garmin 专有字段的字段级合并 upsert：只写 Garmin 字段，
+    /// 不覆盖 HealthKit 写入的 activeKcal / sleepMinutes / avgHR 等。
+    /// 同日已有快照则原行合并；否则新建一行（HealthKit 字段落 0/nil，等待 HealthKit 同步补齐）。
+    @discardableResult
+    func upsertGarmin(date: Date, fields: GarminSnapshotFields, syncedAt: Date) throws -> DailyHealthSnapshot {
+        if let existing = try snapshot(for: date) {
+            existing.hrvLastNightAvg = fields.hrvLastNightAvg
+            existing.hrvWeeklyAvg = fields.hrvWeeklyAvg
+            existing.hrvBaselineLow = fields.hrvBaselineLow
+            existing.hrvBaselineHigh = fields.hrvBaselineHigh
+            existing.bodyBatteryCurrent = fields.bodyBatteryCurrent
+            existing.stressAvg = fields.stressAvg
+            existing.deepSleepMin = fields.deepSleepMin
+            existing.remSleepMin = fields.remSleepMin
+            existing.sleepScore = fields.sleepScore
+            existing.syncedAt = syncedAt
+            try context.save()
+            return existing
+        }
+        let snapshot = DailyHealthSnapshot(
+            date: date,
+            activeKcal: 0,
+            sleepMinutes: 0,
+            avgHR: 0,
+            syncedAt: syncedAt
+        )
+        snapshot.hrvLastNightAvg = fields.hrvLastNightAvg
+        snapshot.hrvWeeklyAvg = fields.hrvWeeklyAvg
+        snapshot.hrvBaselineLow = fields.hrvBaselineLow
+        snapshot.hrvBaselineHigh = fields.hrvBaselineHigh
+        snapshot.bodyBatteryCurrent = fields.bodyBatteryCurrent
+        snapshot.stressAvg = fields.stressAvg
+        snapshot.deepSleepMin = fields.deepSleepMin
+        snapshot.remSleepMin = fields.remSleepMin
+        snapshot.sleepScore = fields.sleepScore
+        context.insert(snapshot)
+        try context.save()
+        return snapshot
     }
 
     func delete(_ snapshot: DailyHealthSnapshot) throws {

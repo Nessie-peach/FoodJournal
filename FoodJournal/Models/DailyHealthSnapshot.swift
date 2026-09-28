@@ -40,6 +40,27 @@ final class DailyHealthSnapshot {
     /// 最近一次同步时间
     var syncedAt: Date
 
+    // MARK: Garmin 专有字段（可选；由 Garmin 同步字段级合并写入，不影响 HealthKit 字段）
+
+    /// 昨晚 HRV 均值（ms，佳明 HRV Status）
+    var hrvLastNightAvg: Double?
+    /// 近 7 天 HRV 均值（ms）
+    var hrvWeeklyAvg: Double?
+    /// HRV 平衡基线下限（ms）
+    var hrvBaselineLow: Double?
+    /// HRV 平衡基线上限（ms）
+    var hrvBaselineHigh: Double?
+    /// 身体电量当前值（0-100）
+    var bodyBatteryCurrent: Int?
+    /// 当日压力均值（0-100）
+    var stressAvg: Int?
+    /// 深睡时长（分钟）
+    var deepSleepMin: Double?
+    /// REM 睡眠时长（分钟）
+    var remSleepMin: Double?
+    /// 睡眠分（0-100）
+    var sleepScore: Int?
+
     init(
         id: UUID = UUID(),
         date: Date = .now,

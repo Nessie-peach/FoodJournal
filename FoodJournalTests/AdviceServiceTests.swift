@@ -70,7 +70,15 @@ final class AdviceServiceTests: XCTestCase {
         XCTAssertTrue(text.contains("燕麦粥"))
         XCTAssertTrue(text.contains("热量 300 千卡"))
         XCTAssertTrue(text.contains("70.5 千克"))
-        XCTAssertFalse(text.contains("无数据"))
+        // 健康核心字段齐全：不标注无数据
+        XCTAssertFalse(text.contains("睡眠：无数据"))
+        XCTAssertFalse(text.contains("平均心率：无数据"))
+        XCTAssertFalse(text.contains("HRV：无数据"))
+        XCTAssertFalse(text.contains("运动记录：无数据"))
+        // Garmin 专有字段本快照未同步：逐项标注无数据（E2-2）
+        XCTAssertTrue(text.contains("身体电量：无数据"))
+        XCTAssertTrue(text.contains("压力：无数据"))
+        XCTAssertTrue(text.contains("睡眠分期：无数据"))
     }
 
     /// 无快照：健康数据整段标注无数据，不 crash
