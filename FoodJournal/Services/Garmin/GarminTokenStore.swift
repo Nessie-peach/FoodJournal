@@ -23,6 +23,16 @@ struct GarminTokenStore: Sendable {
 
     private static let oauth1Account = "oauth"
     private static let oauth2Account = "oauth2"
+    /// 登录凭据（邮箱+密码）账号；令牌失效时可免输入重新登录
+    private static let credentialsAccount = "credentials"
+
+    /// 登录凭据：登录成功后存 Keychain，供令牌失效时免密重登。
+    /// 取舍说明：存密码可换取「令牌失效自动重登、用户无感」的体验；
+    /// 密码仅存于本机钥匙串（ThisDeviceOnly），不落文件、不进日志、不上传，风险可控。
+    struct LoginCredentials: Codable, Equatable, Sendable {
+        var email: String
+        var password: String
+    }
 
     init(service: String) {
         self.service = service
@@ -60,6 +70,20 @@ struct GarminTokenStore: Sendable {
     func deleteAll() {
         SecItemDelete(baseQuery(account: Self.oauth1Account) as CFDictionary)
         SecItemDelete(baseQuery(account: Self.oauth2Account) as CFDictionary)
+    }
+
+    // MARK: 登录凭据（邮箱+密码）
+
+    func saveCredentials(_ credentials: LoginCredentials) throws {
+        try save(credentials, account: Self.credentialsAccount)
+    }
+
+    func loadCredentials() -> LoginCredentials? {
+        load(LoginCredentials.self, account: Self.credentialsAccount)
+    }
+
+    func deleteCredentials() {
+        SecItemDelete(baseQuery(account: Self.credentialsAccount) as CFDictionary)
     }
 
     /// 日志脱敏：只打印前 8 位 + 长度（绝不打印完整 token）

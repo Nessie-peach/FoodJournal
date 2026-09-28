@@ -44,6 +44,14 @@ struct ExerciseView: View {
             },
             sort: [SortDescriptor(\.date, order: .reverse)]
         )
+        // 昨日范围（身体电量较昨日趋势对比用）
+        let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: start) ?? start
+        _yesterdaySnapshots = Query(
+            filter: #Predicate<DailyHealthSnapshot> { snapshot in
+                snapshot.date >= yesterdayStart && snapshot.date < start
+            },
+            sort: [SortDescriptor(\.date, order: .reverse)]
+        )
     }
 
     var body: some View {
@@ -85,7 +93,7 @@ struct ExerciseView: View {
                     icon: "bed.double.fill", title: "睡眠", tint: .indigo,
                     value: HealthCardFormat.sleepText(minutes: snapshot.sleepMinutes),
                     unit: nil,
-                    footnote: sleepTimeText(snapshot)
+                    footnote: sleepFootnote(snapshot)
                 )
                 HealthMetricCard(
                     icon: "heart.fill", title: "平均心率", tint: .pink,
@@ -94,9 +102,21 @@ struct ExerciseView: View {
                 )
                 HealthMetricCard(
                     icon: "waveform.path.ecg", title: "HRV", tint: .green,
-                    value: HealthCardFormat.hrvText(ms: snapshot.hrvMS) ?? "—",
-                    unit: snapshot.hrvMS != nil ? "ms" : nil,
-                    footnote: snapshot.hrvMS != nil ? nil : "佳明未同步 HRV"
+                    value: hrvCard.value,
+                    unit: hrvCard.unit,
+                    footnote: hrvCard.footnote
+                )
+                HealthMetricCard(
+                    icon: "battery.75percent", title: "身体电量", tint: .cyan,
+                    value: batteryCard.value,
+                    unit: batteryCard.unit,
+                    footnote: batteryCard.footnote
+                )
+                HealthMetricCard(
+                    icon: "brain.head.profile", title: "压力", tint: .mint,
+                    value: stressCard.value,
+                    unit: stressCard.unit,
+                    footnote: stressCard.footnote
                 )
             }
 
@@ -105,6 +125,40 @@ struct ExerciseView: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(16)
+    }
+
+    /// HRV 卡：有 Garmin 数据优先（标「佳明」），否则回落 HealthKit，都没有显示「未同步」
+    private var hrvCard: ExerciseCardLogic.HRVCard {
+        ExerciseCardLogic.hrvCard(from: todaySnapshot)
+    }
+
+    /// 身体电量卡：当前值 + 较昨日充/放趋势
+    private var batteryCard: ExerciseCardLogic.BatteryCard {
+        ExerciseCardLogic.batteryCard(current: todaySnapshot?.bodyBatteryCurrent, yesterday: yesterdaySnapshot?.bodyBatteryCurrent)
+    }
+
+    /// 压力卡：均值 + 等级文案
+    private var stressCard: ExerciseCardLogic.StressCard {
+        ExerciseCardLogic.stressCard(avg: todaySnapshot?.stressAvg)
+    }
+
+    /// 昨日快照（身体电量趋势对比用）
+    @Query private var yesterdaySnapshots: [DailyHealthSnapshot]
+
+    private var yesterdaySnapshot: DailyHealthSnapshot? {
+        yesterdaySnapshots.first
+    }
+
+    /// 睡眠卡脚注：起止时间 + 分期摘要（深睡/REM/睡眠分，有 Garmin 分期数据时）
+    private func sleepFootnote(_ snapshot: DailyHealthSnapshot) -> String? {
+        var parts: [String] = []
+        if let timeText = sleepTimeText(snapshot) {
+            parts.append(timeText)
+        }
+        if let stagesText = ExerciseCardLogic.sleepStagesText(snapshot) {
+            parts.append(stagesText)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 
     /// 「23:40 入睡 · 07:00 起床」，起止任一缺失则不显示
@@ -304,8 +358,101 @@ struct ExerciseView: View {
         }
     }
 
+    /// HealthKit 同步 + 已登录 Garmin 时追加 Garmin 后台同步（数据落快照，卡片经 @Query 自动刷新）
     private func syncNow() async {
         await HealthKitService().syncRecent(days: 7, context: modelContext)
+        if GarminTokenStore.shared.loadTokens() != nil {
+            await GarminSyncService().syncRecent(days: 7, context: modelContext)
+        }
+    }
+}
+
+// MARK: - 卡片数据逻辑（纯函数，可单测）
+
+/// 迈开腿卡片数据源选择与文案构造：本地快照驱动，无副作用
+enum ExerciseCardLogic {
+    struct HRVCard: Equatable {
+        let value: String
+        let unit: String?
+        let footnote: String?
+    }
+
+    /// HRV 卡数据源选择：Garmin lastNightAvg 优先（标「佳明」+ 基线状态）→ HealthKit hrvMS 回落 → 未同步
+    static func hrvCard(from snapshot: DailyHealthSnapshot?) -> HRVCard {
+        guard let snapshot else { return HRVCard(value: "—", unit: nil, footnote: "未同步") }
+        if let garmin = snapshot.hrvLastNightAvg {
+            var footnote = "佳明"
+            if let low = snapshot.hrvBaselineLow, let high = snapshot.hrvBaselineHigh {
+                let status = garmin < low ? "，偏低" : garmin > high ? "，偏高" : "，平衡"
+                footnote = "\(Int(garmin.rounded())) ms · 基线 \(Int(low))-\(Int(high))\(status) · 佳明"
+            }
+            return HRVCard(value: String(Int(garmin.rounded())), unit: "ms", footnote: footnote)
+        }
+        if let hk = snapshot.hrvMS {
+            return HRVCard(value: String(Int(hk.rounded())), unit: "ms", footnote: nil)
+        }
+        return HRVCard(value: "—", unit: nil, footnote: "未同步")
+    }
+
+    struct BatteryCard: Equatable {
+        let value: String
+        let unit: String?
+        let footnote: String?
+    }
+
+    /// 身体电量卡：当前值 + 较昨日充/放趋势
+    static func batteryCard(current: Int?, yesterday: Int?) -> BatteryCard {
+        guard let current else { return BatteryCard(value: "—", unit: nil, footnote: "未同步") }
+        let footnote: String?
+        if let yesterday {
+            let delta = current - yesterday
+            footnote = delta > 0 ? "较昨日充电 +\(delta)" : delta < 0 ? "较昨日放电 −\(abs(delta))" : "与昨日持平"
+        } else {
+            footnote = nil
+        }
+        return BatteryCard(value: String(current), unit: nil, footnote: footnote)
+    }
+
+    struct StressCard: Equatable {
+        let value: String
+        let unit: String?
+        let footnote: String?
+    }
+
+    /// 压力卡：均值 + 等级文案（Garmin 分级：0-25 低 / 26-50 中 / 51-75 高 / 76-100 极高）
+    static func stressCard(avg: Int?) -> StressCard {
+        guard let avg else { return StressCard(value: "—", unit: nil, footnote: "未同步") }
+        let level: String
+        switch avg {
+        case ..<26: level = "低压力"
+        case ..<51: level = "中等压力"
+        case ..<76: level = "高压力"
+        default: level = "极高压力"
+        }
+        return StressCard(value: String(avg), unit: nil, footnote: level)
+    }
+
+    /// 睡眠分期摘要：「深睡 x% · REM y% · 睡眠分 z」。
+    /// 百分比基准为快照睡眠时长（HealthKit 口径）；无时长时按分钟展示。
+    /// 任一必需数据缺失返回 nil（脚注退回仅起止时间）。
+    static func sleepStagesText(_ snapshot: DailyHealthSnapshot) -> String? {
+        guard let deep = snapshot.deepSleepMin, let rem = snapshot.remSleepMin else { return nil }
+        var deepPart: String
+        var remPart: String
+        if snapshot.sleepMinutes > 0 {
+            let deepPct = Int((deep / snapshot.sleepMinutes * 100).rounded())
+            let remPct = Int((rem / snapshot.sleepMinutes * 100).rounded())
+            deepPart = "深睡 \(deepPct)%"
+            remPart = "REM \(remPct)%"
+        } else {
+            deepPart = "深睡 \(Int(deep.rounded())) 分"
+            remPart = "REM \(Int(rem.rounded())) 分"
+        }
+        var text = "\(deepPart) · \(remPart)"
+        if let score = snapshot.sleepScore {
+            text += " · 睡眠分 \(score)"
+        }
+        return text
     }
 }
 

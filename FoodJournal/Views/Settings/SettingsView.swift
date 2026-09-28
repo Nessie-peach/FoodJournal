@@ -34,6 +34,8 @@ struct SettingsView: View {
                 )
 
                 HealthDataSection()
+
+                GarminSection()
             }
             .navigationTitle("我的")
         }
@@ -176,6 +178,156 @@ private struct HealthDataSection: View {
             syncResult = "没读到数据，可能未授权，或健康内暂无数据"
         }
         await refreshState()
+    }
+}
+
+// MARK: - Garmin 账号（登录 / 状态 / 同步）
+
+private struct GarminSection: View {
+    @Environment(\.modelContext) private var modelContext
+
+    @State private var isLoggedIn = false
+    @State private var emailInput = ""
+    @State private var passwordInput = ""
+    @State private var isLoggingIn = false
+    @State private var isSyncing = false
+    @State private var syncResult: String?
+    @State private var alertTitle: String?
+    @State private var alertMessage: String?
+
+    private let tokenStore = GarminTokenStore.shared
+
+    private var maskedEmail: String? {
+        GarminTokenStore.shared.loadCredentials().map { GarminAccountMasker.mask($0.email) }
+    }
+
+    var body: some View {
+        Section {
+            if isLoggedIn {
+                loggedInRows
+            } else {
+                loginRows
+            }
+        } header: {
+            Text("Garmin 账号")
+        } footer: {
+            Text("密码仅用于首次登录换取令牌，令牌存本机钥匙串；密码本身存 Keychain 供重新登录使用。")
+                .font(.footnote)
+        }
+        .onAppear { isLoggedIn = tokenStore.loadTokens() != nil }
+        .alert(alertTitle ?? "提示", isPresented: .init(
+            get: { alertTitle != nil },
+            set: { if !$0 { alertTitle = nil; alertMessage = nil } }
+        )) {
+            Button("好的", role: .cancel) {}
+        } message: {
+            Text(alertMessage ?? "")
+        }
+    }
+
+    // MARK: 已登录
+
+    @ViewBuilder
+    private var loggedInRows: some View {
+        HStack {
+            Text("连接状态")
+            Spacer()
+            if let maskedEmail {
+                Text("已连接 \(maskedEmail)")
+                    .foregroundStyle(.secondary)
+                    .font(.footnote)
+            } else {
+                Text("已连接")
+                    .foregroundStyle(.secondary)
+                    .font(.footnote)
+            }
+        }
+
+        Button {
+            Task { await syncNow() }
+        } label: {
+            HStack {
+                if isSyncing {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Text("立即同步")
+            }
+        }
+        .disabled(isSyncing)
+
+        if let syncResult {
+            Text(syncResult)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+
+        Button("退出登录", role: .destructive) {
+            GarminAuthService(tokenStore: tokenStore).logout()
+            tokenStore.deleteCredentials()
+            isLoggedIn = false
+            emailInput = ""
+            syncResult = nil
+        }
+    }
+
+    // MARK: 未登录
+
+    @ViewBuilder
+    private var loginRows: some View {
+        Text("登录后可获取 HRV、身体电量、压力、睡眠分期等佳明专有数据")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+
+        TextField("账号邮箱", text: $emailInput)
+            .keyboardType(.emailAddress)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+
+        SecureField("密码", text: $passwordInput)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+
+        Button {
+            Task { await login() }
+        } label: {
+            HStack {
+                if isLoggingIn {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Text("登录 Garmin")
+            }
+        }
+        .disabled(isLoggingIn || emailInput.trimmingCharacters(in: .whitespaces).isEmpty || passwordInput.isEmpty)
+    }
+
+    // MARK: 动作
+
+    private func login() async {
+        let email = emailInput.trimmingCharacters(in: .whitespaces)
+        guard !email.isEmpty, !passwordInput.isEmpty else { return }
+        isLoggingIn = true
+        defer { isLoggingIn = false }
+        do {
+            _ = try await GarminAuthService(tokenStore: tokenStore).login(email: email, password: passwordInput)
+            try? tokenStore.saveCredentials(.init(email: email, password: passwordInput))
+            passwordInput = ""
+            isLoggedIn = true
+            alertTitle = "登录成功"
+            alertMessage = "Garmin 账号已连接"
+        } catch {
+            alertTitle = "登录失败"
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    private func syncNow() async {
+        isSyncing = true
+        syncResult = nil
+        defer { isSyncing = false }
+        let outcome = await GarminSyncService(tokenStore: tokenStore).syncRecent(days: 7, context: modelContext)
+        syncResult = outcome.summaryText
     }
 }
 

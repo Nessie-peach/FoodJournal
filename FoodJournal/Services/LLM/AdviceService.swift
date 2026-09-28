@@ -82,10 +82,42 @@ struct AdviceService {
                 lines.append("睡眠：无数据")
             }
             lines.append(snapshot.avgHR > 0 ? "平均心率：\(Int(snapshot.avgHR.rounded())) 次/分" : "平均心率：无数据")
-            if let hrv = snapshot.hrvMS {
+            if let lastNight = snapshot.hrvLastNightAvg {
+                var hrv = "HRV：昨晚平均 \(Int(lastNight.rounded())) ms（佳明）"
+                if let low = snapshot.hrvBaselineLow, let high = snapshot.hrvBaselineHigh {
+                    let vs = lastNight < low ? "低于" : lastNight > high ? "高于" : "处于"
+                    hrv += "，基线 \(Int(low))-\(Int(high)) ms（\(vs)基线）"
+                }
+                lines.append(hrv)
+            } else if let hrv = snapshot.hrvMS {
                 lines.append("HRV：\(Int(hrv.rounded())) ms")
             } else {
                 lines.append("HRV：无数据")
+            }
+            // Garmin 专有：身体电量 / 压力 / 睡眠分期
+            if let battery = snapshot.bodyBatteryCurrent {
+                lines.append("身体电量：\(battery)/100")
+            } else {
+                lines.append("身体电量：无数据")
+            }
+            if let stress = snapshot.stressAvg {
+                lines.append("压力：均值 \(stress)/100")
+            } else {
+                lines.append("压力：无数据")
+            }
+            if let deep = snapshot.deepSleepMin, let rem = snapshot.remSleepMin {
+                var stages = "睡眠分期："
+                if snapshot.sleepMinutes > 0 {
+                    stages += "深睡 \(Int((deep / snapshot.sleepMinutes * 100).rounded()))%，REM \(Int((rem / snapshot.sleepMinutes * 100).rounded()))%"
+                } else {
+                    stages += "深睡 \(Int(deep.rounded())) 分钟，REM \(Int(rem.rounded())) 分钟"
+                }
+                if let score = snapshot.sleepScore {
+                    stages += "，睡眠分 \(score)"
+                }
+                lines.append(stages)
+            } else {
+                lines.append("睡眠分期：无数据")
             }
             let workouts = Self.parseWorkouts(from: snapshot.workoutsJSON)
             if workouts.isEmpty {
