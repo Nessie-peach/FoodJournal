@@ -62,4 +62,32 @@ final class VisionRequestBodyTests: XCTestCase {
         XCTAssertTrue(VisionService.systemPrompt.contains("每份"))
         XCTAssertTrue(VisionService.systemPrompt.contains("只输出 JSON"))
     }
+
+    // MARK: - 备注拼接（R5-1）
+
+    func testMakeRequestBodyWithRemarkBuildsPrioritizedUserText() throws {
+        let body = VisionService.makeRequestBody(
+            config: config, imageDatas: [Data("img".utf8)], remark: "茶百道 三分糖"
+        )
+        let content = userContentEntries(of: body)
+        let textEntry = try XCTUnwrap(content.last { ($0["type"] as? String) == "text" })
+        let text = try XCTUnwrap(textEntry["text"] as? String)
+        XCTAssertEqual(
+            text,
+            "用户备注：茶百道 三分糖（识别时请优先采信备注信息）。请识别照片中的所有菜品，并按系统要求的 JSON 格式输出营养估算。"
+        )
+        XCTAssertEqual(VisionService.userText(remark: "少冰"), VisionService.userText(remark: "  少冰  "), "备注首尾空白应被剔除")
+    }
+
+    func testMakeRequestBodyWithoutRemarkKeepsDefaultUserText() {
+        let body = VisionService.makeRequestBody(config: config, imageDatas: [Data("img".utf8)])
+        let content = userContentEntries(of: body)
+        let text = content.last?["text"] as? String
+        XCTAssertEqual(
+            text,
+            "请识别这些同一餐食照片中的所有菜品，并按系统要求的 JSON 格式输出营养估算。"
+        )
+        XCTAssertEqual(VisionService.userText(remark: nil), text)
+        XCTAssertEqual(VisionService.userText(remark: "   "), text, "纯空白备注视为未填写")
+    }
 }

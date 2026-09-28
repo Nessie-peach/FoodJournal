@@ -53,6 +53,9 @@ struct HomeView: View {
     /// 已压缩、待识别/待保存的照片 JPEG Data（首图在前）
     @State private var pendingImages: [Data] = []
 
+    /// 拍后备注（照片确认页输入，随识别流程传给模型；空白视为未填写）
+    @State private var photoRemark = ""
+
     /// 照片确认页（拍摄/多选后进入，可补拍、删图、发起识别）
     @State private var showConfirmSheet = false
     /// 确认页内补拍的相机（以确认页 sheet 为宿主呈现，取消/成功都回落到确认页）
@@ -203,6 +206,7 @@ struct HomeView: View {
         PhotoConfirmView(
             images: pendingImages,
             canAddMore: pendingImages.count < Self.maxPhotoCount,
+            remark: $photoRemark,
             onRetake: { showRetakeCamera = true },
             onComplete: { completeCapture() },
             onCancel: { showConfirmSheet = false },
@@ -365,19 +369,19 @@ struct HomeView: View {
             showConfigAlert = true
             return
         }
-        startRecognition(config: config, apiKey: apiKey ?? "")
+        startRecognition(config: config, apiKey: apiKey ?? "", remark: photoRemark)
     }
 
     // MARK: - 识别流程
 
-    private func startRecognition(config: LLMProviderConfig, apiKey: String) {
+    private func startRecognition(config: LLMProviderConfig, apiKey: String, remark: String) {
         guard !pendingImages.isEmpty, !isRecognizing else { return }
         let images = pendingImages
         isRecognizing = true
         recognitionTask = Task {
             do {
                 let result = try await VisionService().recognizeFood(
-                    imageDatas: images, config: config, apiKey: apiKey
+                    imageDatas: images, remark: remark, config: config, apiKey: apiKey
                 )
                 guard !Task.isCancelled else { return }
                 // 识别成功：立即跳编辑页（识别模式），首图作封面、焦点落餐名
@@ -391,6 +395,7 @@ struct HomeView: View {
                     focusName: true
                 )
                 pendingImages = []
+                photoRemark = ""
             } catch is CancellationError {
                 // 用户取消，静默
             } catch let error as URLError where error.code == .cancelled {
@@ -416,7 +421,7 @@ struct HomeView: View {
     private func retryRecognition() {
         let config = LLMProviderConfig(json: visionConfigJSON) ?? .default
         let apiKey = KeychainStore.vision.load() ?? ""
-        startRecognition(config: config, apiKey: apiKey)
+        startRecognition(config: config, apiKey: apiKey, remark: photoRemark)
     }
 
     /// 识别失败后改手动记录：保留全部照片预填，其余手动填
@@ -431,6 +436,7 @@ struct HomeView: View {
             focusName: true
         )
         pendingImages = []
+        photoRemark = ""
     }
 
     // MARK: - 记录删除
@@ -563,6 +569,8 @@ private struct PhotoConfirmView: View {
     let images: [Data]
     /// 未达上限时展示「再拍一张」
     let canAddMore: Bool
+    /// 拍后备注（随「完成拍摄」传入识别流程）
+    @Binding var remark: String
     let onRetake: () -> Void
     let onComplete: () -> Void
     let onCancel: () -> Void
@@ -575,6 +583,9 @@ private struct PhotoConfirmView: View {
                     emptyState
                 } else {
                     thumbnailStrip
+                    remarkField
+                        .padding(.horizontal, 16)
+                        .padding(.top, 4)
                     Spacer()
                 }
             }
@@ -612,6 +623,18 @@ private struct PhotoConfirmView: View {
         } description: {
             Text("照片已全部删除，可取消后重新拍摄或从相册选择")
         }
+    }
+
+    /// 备注输入框：语音靠系统键盘听写，不做单独语音按钮
+    private var remarkField: some View {
+        TextField(
+            "补充信息帮助识别：如品牌、糖度、份量（可选）",
+            text: $remark,
+            axis: .vertical
+        )
+        .lineLimit(1...3)
+        .textFieldStyle(.roundedBorder)
+        .accessibilityLabel("拍后备注")
     }
 
     private var thumbnailStrip: some View {

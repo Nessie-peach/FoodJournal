@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 import UniformTypeIdentifiers
 
 struct SettingsView: View {
@@ -41,7 +42,6 @@ struct SettingsView: View {
 
 private struct HealthDataSection: View {
     @Environment(\.modelContext) private var modelContext
-    @AppStorage(HealthKitService.authRequestedStorageKey) private var hasRequestedHealthAuth = false
 
     @State private var state: HealthAuthorizationState = .notDetermined
     @State private var isSyncing = false
@@ -67,7 +67,7 @@ private struct HealthDataSection: View {
                     Text("立即同步")
                 }
             }
-            .disabled(isSyncing || state == .denied)
+            .disabled(isSyncing)
 
             if let syncResult {
                 Text(syncResult)
@@ -80,18 +80,14 @@ private struct HealthDataSection: View {
             Text("App 变为前台时自动同步最近 7 天数据；也可手动立即同步。")
                 .font(.footnote)
         }
-        .onAppear { refreshState() }
+        .onAppear {
+            Task { await refreshState() }
+        }
     }
 
     @ViewBuilder
     private var permissionRow: some View {
         switch state {
-        case .authorized:
-            HStack {
-                Text("HealthKit 权限")
-                Spacer()
-                Text("已授权").foregroundStyle(.green).font(.footnote)
-            }
         case .notDetermined:
             HStack {
                 Text("HealthKit 权限")
@@ -99,34 +95,46 @@ private struct HealthDataSection: View {
                 Button("去授权") {
                     Task {
                         try? await HealthKitService().requestAuthorization()
-                        hasRequestedHealthAuth = true
-                        refreshState()
+                        await refreshState()
                     }
                 }
                 .font(.footnote)
             }
-        case .denied:
+        case .requested:
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("HealthKit 权限")
                     Spacer()
-                    Text("被拒绝").foregroundStyle(.red).font(.footnote)
+                    // 中性色：系统不告知读取授权结果，不使用「已授权/被拒绝」这类肯定判断
+                    Text("已请求授权")
+                        .foregroundStyle(.secondary)
+                        .font(.footnote)
                 }
-                Text("请到系统设置开启")
+                Text("系统不告知读取授权结果。若同步后仍无数据，请到「健康」App → 右上角头像 → 隐私与访问权限 → App → 今天吃什么 检查读取开关。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Button("前往系统设置") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        UIApplication.shared.open(url)
-                    }
+                Button("打开健康 App") {
+                    openHealthApp()
                 }
                 .font(.footnote)
             }
         }
     }
 
-    private func refreshState() {
-        state = HealthKitService().authorizationState(hasRequestedBefore: hasRequestedHealthAuth)
+    /// 优先直接打开「健康」App；失败则回落到本 App 的系统设置页。
+    /// 注意：只读 HealthKit 的 App 不会出现在「设置 → 今天吃什么」的权限列表里，
+    /// 因此「打开系统设置」只是兜底路径，真正该去的是「健康」App。
+    private func openHealthApp() {
+        if let healthURL = URL(string: "x-apple-health://"),
+           UIApplication.shared.canOpenURL(healthURL) {
+            UIApplication.shared.open(healthURL)
+        } else if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(settingsURL)
+        }
+    }
+
+    private func refreshState() async {
+        state = await HealthKitService().authorizationState()
     }
 
     private func syncNow() async {
@@ -134,12 +142,13 @@ private struct HealthDataSection: View {
         syncResult = nil
         defer { isSyncing = false }
         let service = HealthKitService()
-        guard service.authorizationState(hasRequestedBefore: hasRequestedHealthAuth) == .authorized else {
-            syncResult = "未授权，无法同步"
-            return
+        let outcome = await service.syncRecent(days: 7, context: modelContext)
+        if outcome.daysWritten > 0 {
+            syncResult = "已同步 \(outcome.daysWritten) 天健康数据"
+        } else {
+            syncResult = "没读到数据，可能未授权，或健康内暂无数据"
         }
-        await service.syncRecent(days: 7, context: modelContext)
-        syncResult = "已同步最近 7 天健康数据"
+        await refreshState()
     }
 }
 

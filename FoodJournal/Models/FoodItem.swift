@@ -14,6 +14,8 @@ final class FoodItem {
     var carbs: Double
     /// 脂肪（g）
     var fat: Double
+    /// 营养数据来源：official 表示品牌官方/包装营养表，estimate 表示估算；手动记录为 nil（可选字段，兼容旧数据）
+    var source: String?
     /// 所属餐次
     var meal: Meal?
 
@@ -24,6 +26,7 @@ final class FoodItem {
         protein: Double,
         carbs: Double,
         fat: Double,
+        source: String? = nil,
         meal: Meal? = nil
     ) {
         self.id = id
@@ -32,6 +35,7 @@ final class FoodItem {
         self.protein = protein
         self.carbs = carbs
         self.fat = fat
+        self.source = source
         self.meal = meal
     }
 }

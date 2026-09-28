@@ -1,4 +1,6 @@
 import XCTest
+import HealthKit
+import SwiftData
 @testable import FoodJournal
 
 /// HealthKitService 可测试纯函数：睡眠跨天归属与运动记录去重合并
@@ -119,5 +121,70 @@ final class HealthKitAggregationTests: XCTestCase {
         XCTAssertNil(HealthKitService.workoutsJSONString([]))
         XCTAssertEqual(HealthKitService.decodeWorkouts(nil), [])
         XCTAssertEqual(HealthKitService.decodeWorkouts("invalid json"), [])
+    }
+}
+
+// MARK: - 授权状态探测
+
+/// 假的授权探测器：不触碰真实 HealthKit，可指定返回状态或抛错，并记录调用次数
+@MainActor
+private final class FakeAuthorizationProber: HealthAuthorizationProbing {
+    private let statusResult: Result<HKAuthorizationRequestStatus, Error>
+    private(set) var callCount = 0
+
+    init(statusResult: Result<HKAuthorizationRequestStatus, Error>) {
+        self.statusResult = statusResult
+    }
+
+    func requestStatusForAuthorization() async throws -> HKAuthorizationRequestStatus {
+        callCount += 1
+        return try statusResult.get()
+    }
+}
+
+/// 授权状态两态映射 + syncRecent 在未请求授权时的守卫行为
+@MainActor
+final class HealthKitAuthorizationTests: XCTestCase {
+    func testShouldRequestMapsToNotDetermined() async {
+        let service = HealthKitService(
+            prober: FakeAuthorizationProber(statusResult: .success(.shouldRequest))
+        )
+        let state = await service.authorizationState()
+        XCTAssertEqual(state, .notDetermined)
+    }
+
+    func testUnnecessaryMapsToRequested() async {
+        let service = HealthKitService(
+            prober: FakeAuthorizationProber(statusResult: .success(.unnecessary))
+        )
+        let state = await service.authorizationState()
+        XCTAssertEqual(state, .requested)
+    }
+
+    func testProbeThrowingMapsToNotDetermined() async {
+        let error = NSError(domain: "test", code: 1)
+        let service = HealthKitService(
+            prober: FakeAuthorizationProber(statusResult: .failure(error))
+        )
+        let state = await service.authorizationState()
+        XCTAssertEqual(state, .notDetermined)
+    }
+
+    /// 未请求授权（.shouldRequest）时 syncRecent 不应写入任何快照，并返回空结果
+    func testSyncRecentSkipsWritingWhenNotDetermined() async throws {
+        let container = try TestSupport.makeContainer()
+        let context = ModelContext(container)
+        let prober = FakeAuthorizationProber(statusResult: .success(.shouldRequest))
+        let service = HealthKitService(prober: prober)
+
+        let outcome = await service.syncRecent(days: 7, context: context)
+
+        XCTAssertEqual(outcome.daysWritten, 0)
+        XCTAssertFalse(outcome.hasAnyData)
+        XCTAssertEqual(prober.callCount, 1, "syncRecent 应先探测一次授权状态")
+        XCTAssertTrue(
+            try context.fetch(FetchDescriptor<DailyHealthSnapshot>()).isEmpty,
+            "未请求授权时不应写入任何快照"
+        )
     }
 }

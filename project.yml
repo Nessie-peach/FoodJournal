@@ -7,8 +7,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6"
-    MARKETING_VERSION: "1.1"
-    CURRENT_PROJECT_VERSION: "2"
+    MARKETING_VERSION: "1.2"
+    CURRENT_PROJECT_VERSION: "3"
     PRODUCT_NAME: "$(TARGET_NAME)"
     ALWAYS_SEARCH_USER_PATHS: "NO"
     # 签名：写在这里，避免每次 xcodegen 重新生成工程后 Xcode 里配的 Team 丢失

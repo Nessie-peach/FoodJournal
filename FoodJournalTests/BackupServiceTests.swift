@@ -39,7 +39,8 @@ final class BackupServiceTests: XCTestCase {
             items: [
                 FoodItem(
                     id: UUID(uuidString: "AAAAAAAA-0000-0000-0000-0000000000AA")!,
-                    name: "巨无霸", calories: 550, protein: 25, carbs: 45, fat: 30, meal: nil
+                    name: "巨无霸", calories: 550, protein: 25, carbs: 45, fat: 30,
+                    source: "official", meal: nil
                 ),
                 FoodItem(
                     id: UUID(uuidString: "AAAAAAAA-0000-0000-0000-0000000000AB")!,
@@ -124,6 +125,9 @@ final class BackupServiceTests: XCTestCase {
         XCTAssertEqual(burger.protein, 25)
         XCTAssertEqual(burger.carbs, 45)
         XCTAssertEqual(burger.fat, 30)
+        XCTAssertEqual(burger.source, "official", "source 字段应随备份 round-trip 保留")
+        let fries = try XCTUnwrap(meal.items.first { $0.name == "中薯条" })
+        XCTAssertNil(fries.source, "source 为 nil 的菜品 round-trip 后仍应为 nil")
         XCTAssertTrue(meal.items.allSatisfy { $0.meal === meal })
 
         // 其余表
@@ -240,5 +244,52 @@ final class BackupServiceTests: XCTestCase {
         // 中文摘要包含计数
         XCTAssertTrue(report.summary.contains("新增 1"))
         XCTAssertTrue(report.summary.contains("跳过重复 1"))
+    }
+
+    // MARK: - 6. 旧格式备份（菜品无 source 键）可导入（R5-1 向后兼容）
+
+    func testLegacyBackupWithoutSourceImportsFine() throws {
+        // 手工构造 schema v1 旧格式 JSON：菜品对象不含 source 键
+        let legacyJSON = """
+        {
+          "schemaVersion": 1,
+          "exportedAt": "2026-01-01T08:00:00Z",
+          "meals": [
+            {
+              "id": "AAAAAAAA-0000-0000-0000-0000000000FF",
+              "date": "2026-01-01T12:30:00Z",
+              "mealType": "lunch",
+              "name": "旧备份一餐",
+              "photoData": null,
+              "additionalPhotos": [],
+              "items": [
+                {
+                  "id": "AAAAAAAA-0000-0000-0000-0000000000FE",
+                  "name": "旧菜品",
+                  "calories": 100,
+                  "protein": 10,
+                  "carbs": 20,
+                  "fat": 5
+                }
+              ]
+            }
+          ],
+          "weights": [],
+          "journals": [],
+          "advices": []
+        }
+        """
+        let url = try makeBackupFile(data: Data(legacyJSON.utf8))
+
+        let service = BackupService(modelContext: context)
+        let report = try service.importBackup(from: url)
+        XCTAssertEqual(report.mealsAdded, 1)
+
+        let meal = try XCTUnwrap(try context.fetch(FetchDescriptor<Meal>()).first)
+        XCTAssertEqual(meal.name, "旧备份一餐")
+        XCTAssertEqual(meal.items.count, 1)
+        XCTAssertEqual(meal.items[0].name, "旧菜品")
+        XCTAssertEqual(meal.items[0].calories, 100)
+        XCTAssertNil(meal.items[0].source, "旧备份无 source 键，导入后应为 nil")
     }
 }
