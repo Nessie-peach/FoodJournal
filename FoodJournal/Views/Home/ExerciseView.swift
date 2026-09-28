@@ -10,11 +10,26 @@ struct ExerciseView: View {
 
     @Query private var todaySnapshots: [DailyHealthSnapshot]
 
+    /// 建议模型配置（@AppStorage JSON，与「我的-建议模型」共享）
+    @AppStorage(LLMProviderConfig.adviceStorageKey) private var adviceConfigJSON = "{}"
+
     /// 授权状态（异步取一次）：用于区分空态是「未授权」还是「健康里没数据」
     @State private var authState: HealthAuthorizationState = .notDetermined
 
+    /// 当日 AI 建议缓存（channel = exercise）
+    @State private var cachedAdvice: DailyAdvice?
+    @State private var isGenerating = false
+    @State private var generationTask: Task<Void, Never>?
+    @State private var errorMessage: String?
+
     private var todaySnapshot: DailyHealthSnapshot? {
         todaySnapshots.first
+    }
+
+    /// 建议模型是否可用（端点 + 模型 + Key 均已配置）
+    private var isAdviceConfigured: Bool {
+        let config = LLMProviderConfig(json: adviceConfigJSON) ?? .default
+        return config.isEndpointConfigured && config.isModelConfigured && KeychainStore.advice.hasStoredKey
     }
 
     init(selectedTab: Binding<AppTab>) {
@@ -33,16 +48,24 @@ struct ExerciseView: View {
 
     var body: some View {
         ScrollView {
-            Group {
-                if let snapshot = todaySnapshot {
-                    cards(for: snapshot)
-                } else {
-                    emptyState
+            VStack(spacing: 16) {
+                Group {
+                    if let snapshot = todaySnapshot {
+                        cards(for: snapshot)
+                    } else {
+                        emptyState
+                    }
                 }
+                .frame(maxWidth: .infinity)
+
+                adviceCard
             }
             .frame(maxWidth: .infinity)
         }
-        .onAppear(perform: triggerSync)
+        .onAppear {
+            loadCachedAdvice()
+            triggerSync()
+        }
         .refreshable { await syncNow() }
     }
 
@@ -127,6 +150,147 @@ struct ExerciseView: View {
 
     private var emptyStateButtonTitle: String {
         authState == .notDetermined ? "去授权" : "去设置"
+    }
+
+    // MARK: - AI 健康建议卡
+
+    private var adviceCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(.purple)
+                Text("AI 健康建议")
+                    .font(.subheadline.weight(.semibold))
+            }
+
+            if isGenerating {
+                HStack(spacing: 12) {
+                    ProgressView()
+                    Text("正在结合今日数据生成建议…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("取消", role: .cancel) {
+                        generationTask?.cancel()
+                        isGenerating = false
+                    }
+                    .font(.subheadline)
+                }
+            } else if todaySnapshot == nil {
+                Text("先完成健康数据授权，才能生成建议")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Button {
+                    selectedTab = .settings
+                } label: {
+                    Label("生成今日建议", systemImage: "sparkles")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(true)
+            } else if !isAdviceConfigured {
+                Text("建议模型未配置，请先到「我的」填写模型与 API Key")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Button {
+                    selectedTab = .settings
+                } label: {
+                    Label("去配置", systemImage: "gearshape")
+                }
+                .buttonStyle(.borderedProminent)
+            } else if let advice = cachedAdvice {
+                adviceContent(advice)
+            } else {
+                Text("结合今天的睡眠、运动与饮食数据，生成私人化建议")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Button {
+                    generateAdvice()
+                } label: {
+                    Label("生成今日建议", systemImage: "sparkles")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            if let errorMessage, !isGenerating {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 24)
+    }
+
+    /// 建议全文：四个小标题加粗分段 + 生成时间 + 重新生成
+    private func adviceContent(_ advice: DailyAdvice) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            let sections = AdviceService.parseSections(from: advice.content)
+            ForEach(sections.indices, id: \.self) { index in
+                let section = sections[index]
+                VStack(alignment: .leading, spacing: 4) {
+                    if !section.title.isEmpty {
+                        Text(section.title)
+                            .font(.subheadline.weight(.bold))
+                    }
+                    Text(section.body)
+                        .font(.subheadline)
+                        .foregroundStyle(section.title.isEmpty ? .primary : .secondary)
+                }
+            }
+
+            HStack {
+                Text("生成于 \(HealthCardFormat.clockText(advice.generatedAt))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button {
+                    generateAdvice()
+                } label: {
+                    Label("重新生成", systemImage: "arrow.clockwise")
+                        .font(.subheadline)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private func loadCachedAdvice() {
+        cachedAdvice = try? AdviceRepository(context: modelContext)
+            .advice(for: .now, channel: DailyAdvice.Channel.exercise)
+    }
+
+    private func generateAdvice() {
+        guard todaySnapshot != nil, !isGenerating else { return }
+        let config = LLMProviderConfig(json: adviceConfigJSON) ?? .default
+        guard config.isEndpointConfigured, config.isModelConfigured,
+              let apiKey = KeychainStore.advice.load() else { return }
+
+        errorMessage = nil
+        isGenerating = true
+        let context = modelContext
+        generationTask = Task {
+            do {
+                let content = try await AdviceService()
+                    .generateAdvice(date: .now, context: context, config: config, apiKey: apiKey)
+                guard !Task.isCancelled else { return }
+                let saved = try AdviceRepository(context: context).upsert(
+                    date: .now,
+                    channel: DailyAdvice.Channel.exercise,
+                    content: content,
+                    modelTag: config.modelID
+                )
+                cachedAdvice = saved
+            } catch is CancellationError {
+            } catch {
+                if !Task.isCancelled {
+                    errorMessage = error.localizedDescription
+                }
+            }
+            isGenerating = false
+        }
     }
 
     // MARK: - 同步
