@@ -43,6 +43,10 @@ targets:
         UILaunchScreen: {}
         NSCameraUsageDescription: "拍照用于识别饮食内容并记录营养信息"
         NSHealthShareUsageDescription: "读取你的运动消耗、睡眠与心率数据，用于今日健康概览、统计与健康建议。"
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.pigeon.foodjournal.garmin-refresh
+        UIBackgroundModes:
+          - fetch
   FoodJournalTests:
     type: bundle.unit-test
     platform: iOS

@@ -287,7 +287,9 @@ struct HomeView: View {
                 CalorieGapCard(
                     totalBurnedKcal: todaySnapshots.first.map { $0.activeKcal + $0.restingKcal },
                     consumedKcal: todayMeals.reduce(0) { $0 + $1.totalCalories },
-                    goalKcal: gapGoalKcal
+                    goalKcal: gapGoalKcal,
+                    isGarminSyncing: SyncStatusStore.shared.isSyncing
+                        && SyncStatusStore.shared.currentSources.contains(.garmin)
                 )
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
@@ -556,6 +558,8 @@ private struct CalorieGapCard: View {
     let totalBurnedKcal: Double?
     let consumedKcal: Double
     let goalKcal: Double
+    /// 同步中且含 Garmin 来源：消耗行显示小转圈（未登录 Garmin 时不转，维持「待同步」）
+    var isGarminSyncing: Bool = false
 
     private var result: CalorieGap.Result? {
         CalorieGap.evaluate(
@@ -587,7 +591,7 @@ private struct CalorieGapCard: View {
         let consumed = Int(consumedKcal.rounded())
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 0) {
-                metric(value: burned, label: "今日总消耗")
+                metric(value: burned, label: "今日总消耗", showsSpinner: isGarminSyncing)
                 metric(value: consumed, label: "已摄入")
                 metric(value: burned - consumed, label: "当前缺口")
             }
@@ -596,12 +600,20 @@ private struct CalorieGapCard: View {
         }
     }
 
-    private func metric(value: Int, label: String) -> some View {
+    private func metric(value: Int, label: String, showsSpinner: Bool = false) -> some View {
         VStack(spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text("\(value)")
-                    .font(.title3.weight(.semibold))
-                    .monospacedDigit()
+                ZStack(alignment: .leading) {
+                    Text("\(value)")
+                        .font(.title3.weight(.semibold))
+                        .monospacedDigit()
+                        .opacity(showsSpinner ? 0 : 1)
+                        .foregroundStyle(showsSpinner ? Color.secondary : Color.primary)
+                    if showsSpinner {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
                 Text("千卡")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -648,22 +660,29 @@ private struct CalorieGapCard: View {
     private var pendingRows: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 0) {
-                pendingItem(value: "待同步", label: "今日总消耗")
+                pendingItem(value: "待同步", label: "今日总消耗", showsSpinner: isGarminSyncing)
                 pendingItem(value: "\(Int(consumedKcal.rounded()))", label: "已摄入")
                 pendingItem(value: "—", label: "当前缺口")
             }
-            Text("健康数据待同步，同步后显示缺口进度")
+            Text(isGarminSyncing ? "正在同步健康数据…" : "健康数据待同步，同步后显示缺口进度")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
     }
 
-    private func pendingItem(value: String, label: String) -> some View {
+    private func pendingItem(value: String, label: String, showsSpinner: Bool = false) -> some View {
         VStack(spacing: 2) {
-            Text(value)
-                .font(.subheadline)
-                .monospacedDigit()
-                .foregroundStyle(.tertiary)
+            ZStack(alignment: .center) {
+                Text(value)
+                    .font(.subheadline)
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+                    .opacity(showsSpinner ? 0 : 1)
+                if showsSpinner {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.tertiary)

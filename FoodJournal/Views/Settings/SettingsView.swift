@@ -9,6 +9,16 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                GarminSection()
+
+                HealthDataSection()
+
+                GoalSection()
+
+                DataManagementSection(
+                    modelContext: modelContext
+                )
+
                 Section("LLM 模型设置") {
                     Text("识图功能需选择支持视觉（图片输入）的模型；API Key 与所有配置仅存储在本机，不会上传到任何服务器。")
                         .font(.footnote)
@@ -26,16 +36,6 @@ struct SettingsView: View {
                     storageKey: LLMProviderConfig.adviceStorageKey,
                     keychain: .advice
                 )
-
-                GoalSection()
-
-                DataManagementSection(
-                    modelContext: modelContext
-                )
-
-                HealthDataSection()
-
-                GarminSection()
             }
             .navigationTitle("我的")
         }
@@ -184,8 +184,6 @@ private struct HealthDataSection: View {
 // MARK: - Garmin 账号（登录 / 状态 / 同步）
 
 private struct GarminSection: View {
-    @Environment(\.modelContext) private var modelContext
-
     @State private var isLoggedIn = false
     @State private var emailInput = ""
     @State private var passwordInput = ""
@@ -326,8 +324,18 @@ private struct GarminSection: View {
         isSyncing = true
         syncResult = nil
         defer { isSyncing = false }
-        let outcome = await GarminSyncService(tokenStore: tokenStore).syncRecent(days: 7, context: modelContext)
-        syncResult = outcome.summaryText
+        // 手动同步：忽略防抖、重置熔断计数，HealthKit + Garmin 一起跑
+        let outcome = await SyncCoordinator.shared.sync(trigger: .manual)
+        switch outcome {
+        case .skipped:
+            syncResult = "同步被跳过，请稍后重试"
+        case .completed(let summary, let error):
+            if let error, !error.isEmpty {
+                syncResult = "同步失败：\(error)"
+            } else {
+                syncResult = summary ?? "同步完成"
+            }
+        }
     }
 }
 

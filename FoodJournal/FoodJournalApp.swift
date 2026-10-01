@@ -19,17 +19,28 @@ struct FoodJournalApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.modelContext) private var modelContext
 
+    /// 显式创建容器：SyncCoordinator 后台同步（BGTask 场景拿不到环境 modelContext）需要复用同一容器
+    private let modelContainer: ModelContainer = {
+        do {
+            return try ModelContainer(
+                for: Meal.self, FoodItem.self, WeightRecord.self,
+                DailyJournal.self, DailyAdvice.self, DailyHealthSnapshot.self
+            )
+        } catch {
+            fatalError("无法创建数据容器：\(error)")
+        }
+    }()
+
+    init() {
+        // BGTaskScheduler.register 须在 App 完成启动前调用：注册后台刷新 handler 并提交第一次请求
+        SyncCoordinator.shared.configure(container: modelContainer)
+        BackgroundRefreshScheduler.shared.registerHandlerAndSchedule()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .modelContainer(for: [
-                    Meal.self,
-                    FoodItem.self,
-                    WeightRecord.self,
-                    DailyJournal.self,
-                    DailyAdvice.self,
-                    DailyHealthSnapshot.self,
-                ])
+                .modelContainer(modelContainer)
                 .onChange(of: scenePhase) { _, phase in
                     guard phase == .active else { return }
                     handleSceneActive()
@@ -37,25 +48,17 @@ struct FoodJournalApp: App {
         }
     }
 
-    /// 变为 active 时后台同步最近 7 天健康数据（fire-and-forget，不阻塞启动）。
-    /// HealthKit 不告知读取授权结果，故先探测请求状态；仅在尚未请求时弹一次授权，
-    /// 随后同步——是否真能读到数据由查询结果决定。
-    /// 同时：确保 23:30 提醒已调度（幂等，权限被拒静默返回）；执行次日建议补生成检查。
+    /// 变为 active 时经 SyncCoordinator 触发前台同步（15 分钟防抖；HealthKit 未授权时先弹授权；
+    /// Garmin 未登录自动跳过），同时确保 23:30 提醒已调度（幂等）、执行次日建议补生成检查。
     private func handleSceneActive() {
-        let context = modelContext
         Task { @MainActor in
-            let service = HealthKitService()
-            let state = await service.authorizationState()
-            if state == .notDetermined {
-                try? await service.requestAuthorization()
-            }
-            await service.syncRecent(days: 7, context: context)
+            await SyncCoordinator.shared.sync(trigger: .foreground)
         }
         Task {
             await NotificationService.scheduleDailyReminder()
         }
         Task { @MainActor in
-            await JournalCatchup.runIfNeeded(context: context)
+            await JournalCatchup.runIfNeeded(context: modelContext)
         }
     }
 }
