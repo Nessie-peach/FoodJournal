@@ -12,6 +12,12 @@ struct HomeView: View {
     @Query private var todayMeals: [Meal]
     @Query private var weightRecords: [WeightRecord]
     @Query private var todaySnapshots: [DailyHealthSnapshot]
+    /// 近三天（含今天）餐与快照：趋势表卡用
+    @Query private var recentMeals: [Meal]
+    @Query private var recentSnapshots: [DailyHealthSnapshot]
+
+    /// 跳转饮食历史页
+    @State private var showDietHistory = false
 
     /// 每日热量缺口目标（千卡），我的-目标 中设置
     @AppStorage(CalorieGap.goalStorageKey) private var gapGoalKcal: Double = CalorieGap.defaultGoalKcal
@@ -78,9 +84,6 @@ struct HomeView: View {
     @State private var showSettings = false
     @State private var editRoute: EditRoute?
 
-    /// 历史入口「共 N 天」：全部记录去重天数（进入页面时统计一次）
-    @State private var totalDietDays = 0
-
     /// 跳转 MealEditView 的路由参数（Hashable 以配合 navigationDestination(item:)）
     struct EditRoute: Hashable {
         var prefill: MealEditView.Prefill
@@ -106,6 +109,20 @@ struct HomeView: View {
         _todaySnapshots = Query(
             filter: #Predicate<DailyHealthSnapshot> { snapshot in
                 snapshot.date >= start && snapshot.date < end
+            },
+            sort: [SortDescriptor(\.date, order: .reverse)]
+        )
+        // 近三天：前天 0 点至明天 0 点（趋势表卡）
+        let threeDayStart = calendar.date(byAdding: .day, value: -2, to: start) ?? start
+        _recentMeals = Query(
+            filter: #Predicate<Meal> { meal in
+                meal.date >= threeDayStart && meal.date < end
+            },
+            sort: [SortDescriptor(\.date, order: .reverse)]
+        )
+        _recentSnapshots = Query(
+            filter: #Predicate<DailyHealthSnapshot> { snapshot in
+                snapshot.date >= threeDayStart && snapshot.date < end
             },
             sort: [SortDescriptor(\.date, order: .reverse)]
         )
@@ -145,12 +162,10 @@ struct HomeView: View {
         .navigationDestination(item: $editRoute) { route in
             MealEditView(prefill: route.prefill, focusNameOnAppear: route.focusName)
         }
+        .navigationDestination(isPresented: $showDietHistory) {
+            DietHistoryView()
+        }
         .toolbar { toolbarItems }
-        .onAppear { loadTotalDietDays() }
-    }
-
-    private func loadTotalDietDays() {
-        totalDietDays = MealRepository(context: modelContext).recordedDayCount()
     }
 
     // MARK: - 顶栏
@@ -292,20 +307,6 @@ struct HomeView: View {
             }
 
             Section {
-                NavigationLink {
-                    DietHistoryView()
-                } label: {
-                    HStack {
-                        Spacer()
-                        Text("查看饮食历史（共 \(totalDietDays) 天）")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .listRowBackground(Color.clear)
-            }
-
-            Section {
                 CalorieGapCard(
                     totalBurnedKcal: todaySnapshots.first.map { $0.activeKcal + $0.restingKcal },
                     consumedKcal: todayMeals.reduce(0) { $0 + $1.totalCalories },
@@ -330,6 +331,17 @@ struct HomeView: View {
                 if todayMeals.isEmpty {
                     Text("还没有记录，点右上角 + 记一餐吧")
                 }
+            }
+
+            Section {
+                ThreeDayTrendCard(
+                    rows: TrendPreview.recentThreeDayTrend(
+                        meals: recentMeals, snapshots: recentSnapshots, now: .now
+                    ),
+                    onOpenHistory: { showDietHistory = true }
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
 
             Section {
@@ -710,6 +722,134 @@ private struct CalorieGapCard: View {
                 .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - 近三天趋势表卡
+
+/// 近三天摄入/消耗/差值一览：点标题行箭头进入完整饮食历史
+private struct ThreeDayTrendCard: View {
+    let rows: [TrendPreview.TrendRow]
+    let onOpenHistory: () -> Void
+
+    /// 数值列宽（摄入/消耗/差值右对齐）
+    private let valueWidth: CGFloat = 62
+
+    private var showsPendingNotice: Bool { TrendPreview.showsBurnPendingNotice(rows) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            headerButton
+            columnHeaders
+            ForEach(rows) { row in
+                rowView(row)
+            }
+            if showsPendingNotice {
+                Text("消耗数据待同步")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: 标题行（44pt 点击区，整行可点）
+
+    private var headerButton: some View {
+        Button(action: onOpenHistory) {
+            HStack {
+                Text("近三天")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(.quaternary, in: Circle())
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("近三天趋势，查看饮食历史")
+    }
+
+    // MARK: 表头与数据行
+
+    private var columnHeaders: some View {
+        HStack {
+            Text("日期")
+            Spacer()
+            Text("摄入").frame(width: valueWidth, alignment: .trailing)
+            Text("消耗").frame(width: valueWidth, alignment: .trailing)
+            Text("差值").frame(width: valueWidth, alignment: .trailing)
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+    }
+
+    private func rowView(_ row: TrendPreview.TrendRow) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.label)
+                    .font(.subheadline.weight(row.isToday ? .semibold : .regular))
+                    .foregroundStyle(row.isToday ? .primary : .secondary)
+                Text(shortDate(row.date))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+            valueCell(row.isToday, text: countText(row.intake), color: valueColor(row.isToday))
+            valueCell(row.isToday, text: burnText(row), color: valueColor(row.isToday))
+            valueCell(row.isToday, text: diffText(row), color: diffColor(row))
+        }
+    }
+
+    private func valueCell(_ isToday: Bool, text: String, color: Color) -> some View {
+        Text(text)
+            .font(.subheadline.weight(isToday ? .semibold : .regular))
+            .monospacedDigit()
+            .foregroundStyle(color)
+            .frame(width: valueWidth, alignment: .trailing)
+    }
+
+    // MARK: 数值格式
+
+    private func shortDate(_ date: Date) -> String {
+        let calendar = Calendar.current
+        let month = calendar.component(.month, from: date)
+        let day = calendar.component(.day, from: date)
+        return "\(month)/\(day)"
+    }
+
+    private func countText(_ kcal: Double) -> String {
+        "\(Int(kcal.rounded()))"
+    }
+
+    private func burnText(_ row: TrendPreview.TrendRow) -> String {
+        row.burn.map { countText($0) } ?? "—"
+    }
+
+    /// 缺口（负）显示 −N、盈余（正）显示 +N；无消耗数据显示 —
+    private func diffText(_ row: TrendPreview.TrendRow) -> String {
+        guard let diff = row.diff else { return "—" }
+        let value = Int(diff.rounded())
+        return value < 0 ? "−\(abs(value))" : "+\(value)"
+    }
+
+    private func valueColor(_ isToday: Bool) -> Color {
+        isToday ? .primary : .secondary
+    }
+
+    private func diffColor(_ row: TrendPreview.TrendRow) -> Color {
+        guard let diff = row.diff, Int(diff.rounded()) != 0 else {
+            return row.isToday ? .primary : .secondary
+        }
+        return diff < 0 ? .green : .red
     }
 }
 
