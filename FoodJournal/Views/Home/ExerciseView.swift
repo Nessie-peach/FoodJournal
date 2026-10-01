@@ -405,7 +405,7 @@ struct ExerciseView: View {
         generationTask = Task {
             do {
                 let content = try await AdviceService()
-                    .generateAdvice(date: adviceDay, context: context, config: config, apiKey: apiKey)
+                    .generateAdvice(businessDay: adviceDay, context: context, config: config, apiKey: apiKey)
                 guard !Task.isCancelled else { return }
                 let saved = try AdviceRepository(context: context).upsert(
                     date: adviceDay,

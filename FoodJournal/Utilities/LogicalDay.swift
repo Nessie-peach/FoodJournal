@@ -28,10 +28,20 @@ enum LogicalDay {
     }
 
     /// 业务日半开区间 [start, end)：start = 锚点日 04:00，end = 次日 04:00（不含）。
+    /// 入参为业务日内**任一时刻**（04:00 前归前一业务日）。
     static func businessDayRange(
         of date: Date, calendar: Calendar = .current
     ) -> (start: Date, end: Date) {
-        let anchor = businessDay(of: date, calendar: calendar)
+        businessDayRange(forAnchor: businessDay(of: date, calendar: calendar), calendar: calendar)
+    }
+
+    /// 业务日**锚点**（00:00）→ 该业务日半开区间 [锚点日 04:00, 次日 04:00)。
+    /// 与 `businessDayRange(of:)` 对「该业务日内任一时刻」的结果完全一致；
+    /// 供已持有锚点的调用方直接换算——若对锚点再调 `businessDayRange(of:)`，
+    /// 锚点 00:00 的 hour < 4 会被二次减一天，导致取数偏移到前一业务日。
+    static func businessDayRange(
+        forAnchor anchor: Date, calendar: Calendar = .current
+    ) -> (start: Date, end: Date) {
         let start = calendar.date(
             byAdding: .hour, value: boundaryHour, to: calendar.startOfDay(for: anchor)
         ) ?? calendar.startOfDay(for: anchor)

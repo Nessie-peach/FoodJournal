@@ -26,6 +26,22 @@ final class AdviceServiceTests: XCTestCase {
         try context.save()
     }
 
+    /// 指定日期时间插餐（取餐口径测试用）
+    @MainActor
+    @discardableResult
+    func insertMeal(
+        _ context: ModelContext,
+        name: String,
+        date: Date,
+        calories: Double
+    ) throws -> Meal {
+        let meal = Meal(date: date, mealType: .lunch, name: name)
+        meal.items = [FoodItem(name: name, calories: calories, protein: 0, carbs: 0, fat: 0)]
+        context.insert(meal)
+        try context.save()
+        return meal
+    }
+
     // MARK: - 打包文本
 
     /// 有快照 + 有饮食 + 有体重：关键数值齐全，不 crash
@@ -115,6 +131,115 @@ final class AdviceServiceTests: XCTestCase {
         let snapshot = DailyHealthSnapshot(date: .now, activeKcal: 100, sleepMinutes: 400, avgHR: 60)
         let text = AdviceService.packContextText(snapshot: snapshot, meals: [], weights: [])
         XCTAssertTrue(text.contains("【近 7 日体重】无体重数据"))
+    }
+
+    // MARK: - 业务日取餐口径（B2 回归）
+
+    /// 凌晨 02:00 生成建议：取餐区间 = 生成时刻所属业务日（锚点为前一天），
+    /// 与近三天表口径一致；不得对锚点二次减一天取到前前一业务日。
+    @MainActor
+    func testFetchMealsLateNightUsesGenerationBusinessDay() throws {
+        let context = try makeContext()
+        // 10/1 业务日的餐：白天一餐 + 次日凌晨一餐
+        try insertMeal(context, name: "10/1午餐", date: TestSupport.date(y: 10, d: 1, hour: 12), calories: 300)
+        try insertMeal(context, name: "10/2凌晨", date: TestSupport.date(y: 10, d: 2, hour: 1, minute: 30), calories: 200)
+        // 干扰项：9/30 业务日、10/2 业务日各一餐
+        try insertMeal(context, name: "9/30午餐", date: TestSupport.date(y: 9, d: 30, hour: 12), calories: 999)
+        try insertMeal(context, name: "10/2午餐", date: TestSupport.date(y: 10, d: 2, hour: 12), calories: 500)
+
+        // 生成时刻 10/2 02:00 → 业务日锚点 = 10/1 00:00
+        let now = TestSupport.date(y: 10, d: 2, hour: 2)
+        let anchor = LogicalDay.businessDay(of: now)
+        let meals = AdviceService.fetchMeals(businessDay: anchor, in: context)
+
+        XCTAssertEqual(meals.map(\.name), ["10/1午餐", "10/2凌晨"])
+        XCTAssertEqual(meals.reduce(0) { $0 + $1.totalCalories }, 500)
+    }
+
+    /// 白天 14:00 生成建议：取餐区间 = 当日业务日 [04:00, 次日 04:00)
+    @MainActor
+    func testFetchMealsDaytimeUsesSameDayBusinessDay() throws {
+        let context = try makeContext()
+        try insertMeal(context, name: "10/2午餐", date: TestSupport.date(y: 10, d: 2, hour: 12), calories: 500)
+        try insertMeal(context, name: "10/3凌晨", date: TestSupport.date(y: 10, d: 3, hour: 1), calories: 100)
+        try insertMeal(context, name: "10/1午餐", date: TestSupport.date(y: 10, d: 1, hour: 12), calories: 999)
+
+        // 生成时刻 10/2 14:00 → 业务日锚点 = 10/2 00:00
+        let now = TestSupport.date(y: 10, d: 2, hour: 14)
+        let anchor = LogicalDay.businessDay(of: now)
+        let meals = AdviceService.fetchMeals(businessDay: anchor, in: context)
+
+        XCTAssertEqual(meals.map(\.name), ["10/2午餐", "10/3凌晨"])
+    }
+
+    /// 回归：同一生成时刻，AdviceService 取到的餐集合与近三天表
+    /// （按 businessDay(of: meal.date) 归属）完全一致
+    @MainActor
+    func testFetchMealsMatchesTrendTableGrouping() throws {
+        let context = try makeContext()
+        let dates = [
+            TestSupport.date(y: 10, d: 1, hour: 8),
+            TestSupport.date(y: 10, d: 1, hour: 19),
+            TestSupport.date(y: 10, d: 2, hour: 0, minute: 30),  // 凌晨 → 10/1 业务日
+            TestSupport.date(y: 10, d: 2, hour: 2),              // 凌晨 → 10/1 业务日
+            TestSupport.date(y: 10, d: 2, hour: 9),
+            TestSupport.date(y: 9, d: 30, hour: 21),
+        ]
+        for (index, date) in dates.enumerated() {
+            try insertMeal(context, name: "餐\(index)", date: date, calories: 100)
+        }
+
+        let now = TestSupport.date(y: 10, d: 2, hour: 2)  // 凌晨生成
+        let anchor = LogicalDay.businessDay(of: now)
+        let fetched = AdviceService.fetchMeals(businessDay: anchor, in: context)
+        let allMeals = try context.fetch(FetchDescriptor<Meal>())
+        let trendGrouped = allMeals.filter { LogicalDay.businessDay(of: $0.date) == anchor }
+
+        XCTAssertEqual(Set(fetched.map(\.id)), Set(trendGrouped.map(\.id)))
+        XCTAssertEqual(fetched.count, 4)  // 10/1 全天 2 餐 + 10/2 凌晨 2 餐
+    }
+
+    /// 打包文本带锚点时，睡眠 / 活动消耗 / 饮食行含明确日期与时间段标注
+    @MainActor
+    func testPackContextTextAnnotatesDatesWithAnchor() throws {
+        let snapshot = DailyHealthSnapshot(
+            date: TestSupport.date(y: 10, d: 1, hour: 15),
+            activeKcal: 502,
+            sleepMinutes: 388,  // 6 小时 28 分
+            sleepStart: TestSupport.date(y: 10, d: 1, hour: 2, minute: 33),
+            sleepEnd: TestSupport.date(y: 10, d: 1, hour: 9, minute: 1),
+            avgHR: 60
+        )
+        snapshot.hrvLastNightAvg = 41
+        let meal = Meal(
+            date: TestSupport.date(y: 10, d: 1, hour: 12),
+            mealType: .lunch,
+            name: "鸡腿饭"
+        )
+        meal.items = [FoodItem(name: "鸡腿饭", calories: 2249, protein: 0, carbs: 0, fat: 0)]
+
+        let text = AdviceService.packContextText(
+            snapshot: snapshot,
+            meals: [meal],
+            weights: [],
+            businessDayAnchor: TestSupport.date(y: 10, d: 1, hour: 0)
+        )
+
+        XCTAssertTrue(text.contains("（10/1 02:33 入睡，10/1 09:01 起床）"))
+        XCTAssertTrue(text.contains("活动消耗：502 千卡（10/1 全天）"))
+        XCTAssertTrue(text.contains("HRV：10/1 夜间平均 41 ms（佳明）"))
+        XCTAssertTrue(text.contains("【10/1 饮食（业务日 04:00–次日 03:59）】"))
+        XCTAssertTrue(text.contains("热量 2249 千卡"))
+    }
+
+    /// system prompt 含相对表述禁令（逐字增补，四段式结构不变）
+    func testSystemPromptRequiresExplicitDates() {
+        XCTAssertTrue(AdviceService.systemPrompt.contains(
+            "数据行均已标注日期与时间段，请严格按标注措辞，不要使用『昨晚』『今天』等相对表述替代具体日期（例如应写『10/1 凌晨 02:33 入睡』）。"
+        ))
+        // 原四段式结构仍在
+        XCTAssertTrue(AdviceService.systemPrompt.contains("一、当日概况"))
+        XCTAssertTrue(AdviceService.systemPrompt.contains("四、心理关怀"))
     }
 
     // MARK: - DailyAdvice channel upsert
