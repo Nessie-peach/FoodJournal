@@ -90,11 +90,14 @@ install_agent() {
 </plist>
 PLISTEOF
   launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null
-  if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then
+  if out="$(launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>&1)"; then
     echo "已安装并加载：$PLIST（每 10 分钟一次，AUTO_COMMIT=$AUTO_COMMIT）"
     log "安装 launchd 任务，AUTO_COMMIT=$AUTO_COMMIT"
   else
-    echo "加载失败，请手动执行：launchctl bootstrap gui/$(id -u) \"$PLIST\""
+    echo "加载失败：$out"
+    echo "→ 受沙箱限制无法访问 launchd，请在**你自己的终端**执行："
+    echo "   launchctl bootstrap gui/\$(id -u) \"$PLIST\""
+    log "launchd 加载失败：$out"
     return 1
   fi
 }
