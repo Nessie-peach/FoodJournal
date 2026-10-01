@@ -37,23 +37,29 @@ struct AdviceService {
     /// 请求超时（秒）
     static let timeoutInterval: TimeInterval = 45
 
-    /// 生成当日健康建议。
+    /// 生成健康建议。
     /// - Parameters:
     ///   - date: 建议对应的日期（默认当天）
     ///   - context: SwiftData 上下文（读快照 / 饮食 / 体重）
     ///   - config: LLM 接入配置（建议模型那份；BaseURL / 模型 ID）
     ///   - apiKey: API Key（仅用于 Authorization 头，绝不进入错误信息）
+    ///   - channel: 建议渠道（"exercise"=迈开腿 / "journal"=小记）
+    ///   - journalText: 小记全文；仅 journal 渠道打包进数据段（无小记传 nil，标「无数据」）
     @MainActor
     func generateAdvice(
         date: Date = .now,
         context: ModelContext,
         config: LLMProviderConfig,
-        apiKey: String
+        apiKey: String,
+        channel: String = DailyAdvice.Channel.exercise,
+        journalText: String? = nil
     ) async throws -> String {
         let userText = Self.packContextText(
             snapshot: Self.fetchSnapshot(for: date, in: context),
             meals: Self.fetchMeals(for: date, in: context),
-            weights: Self.fetchRecentWeights(before: date, days: 7, in: context)
+            weights: Self.fetchRecentWeights(before: date, days: 7, in: context),
+            includesJournalSection: channel == DailyAdvice.Channel.journal,
+            journalText: journalText
         )
         return try await request(userText: userText, config: config, apiKey: apiKey)
     }
@@ -61,11 +67,15 @@ struct AdviceService {
     // MARK: - 数据打包
 
     /// 打包建议用上下文文本；缺失维度明确标注「无数据」，不编造。
-    /// internal 以便单测覆盖有/无快照、无饮食、无体重各分支。
+    /// includesJournalSection 为 true 时（journal 渠道）追加【今日小记】段：
+    /// 有小记打全文，无小记（journalText 为 nil 或空白）标「无数据」。
+    /// internal 以便单测覆盖有/无快照、无饮食、无体重、有/无小记各分支。
     nonisolated static func packContextText(
         snapshot: DailyHealthSnapshot?,
         meals: [Meal],
-        weights: [WeightRecord]
+        weights: [WeightRecord],
+        includesJournalSection: Bool = false,
+        journalText: String? = nil
     ) -> String {
         var lines: [String] = []
 
@@ -167,6 +177,17 @@ struct AdviceService {
                 let delta = last.weightKg - first.weightKg
                 let direction = delta > 0 ? "上升" : delta < 0 ? "下降" : "持平"
                 lines.append("趋势：近期体重\(direction)约 \(Self.numberText(abs(delta))) 千克")
+            }
+        }
+
+        if includesJournalSection {
+            lines.append("")
+            let trimmed = (journalText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                lines.append("【今日小记】无数据")
+            } else {
+                lines.append("【今日小记】")
+                lines.append(trimmed)
             }
         }
         return lines.joined(separator: "\n")
