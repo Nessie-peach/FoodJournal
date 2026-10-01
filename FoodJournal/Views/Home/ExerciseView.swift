@@ -22,6 +22,14 @@ struct ExerciseView: View {
     @State private var generationTask: Task<Void, Never>?
     @State private var errorMessage: String?
 
+    /// 全局同步状态（@Observable，body 内读取自动追踪）
+    private let syncStatus = SyncStatusStore.shared
+
+    /// 卡片数值处是否显示同步转圈：仅当同步中且本轮含 Garmin 来源
+    private var isGarminSyncing: Bool {
+        syncStatus.isSyncing && syncStatus.currentSources.contains(.garmin)
+    }
+
     private var todaySnapshot: DailyHealthSnapshot? {
         todaySnapshots.first
     }
@@ -57,6 +65,9 @@ struct ExerciseView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
+                syncStatusBar
+                    .padding(.horizontal, 16)
+
                 Group {
                     if let snapshot = todaySnapshot {
                         cards(for: snapshot)
@@ -77,6 +88,43 @@ struct ExerciseView: View {
         .refreshable { await syncNow() }
     }
 
+    // MARK: - 同步状态条
+
+    /// 同步中：转圈 + 来源文案；空闲：「上次同步 HH:mm」/「尚未同步」；失败：⚠️ + 重试
+    @ViewBuilder
+    private var syncStatusBar: some View {
+        HStack(spacing: 6) {
+            if syncStatus.isSyncing {
+                ProgressView()
+                    .controlSize(.small)
+                Text(syncStatus.currentSources.contains(.garmin) ? "正在同步佳明数据…" : "正在同步健康数据…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let error = syncStatus.lastError {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.yellow)
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Button("重试") {
+                    Task { await syncNow() }
+                }
+                .font(.caption)
+            } else if let last = syncStatus.lastSyncAt {
+                Text("上次同步 \(HealthCardFormat.clockText(last))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text("尚未同步")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+        }
+    }
+
     // MARK: - 卡片区
 
     private func cards(for snapshot: DailyHealthSnapshot) -> some View {
@@ -87,36 +135,42 @@ struct ExerciseView: View {
             ) {
                 HealthMetricCard(
                     icon: "flame.fill", title: "活动消耗", tint: .orange,
-                    value: "\(Int(snapshot.activeKcal.rounded()))", unit: "千卡"
+                    value: "\(Int(snapshot.activeKcal.rounded()))", unit: "千卡",
+                    showsSpinner: isGarminSyncing
                 )
                 HealthMetricCard(
                     icon: "bed.double.fill", title: "睡眠", tint: .indigo,
                     value: HealthCardFormat.sleepText(minutes: snapshot.sleepMinutes),
                     unit: nil,
-                    footnote: sleepFootnote(snapshot)
+                    footnote: sleepFootnote(snapshot),
+                    showsSpinner: isGarminSyncing
                 )
                 HealthMetricCard(
                     icon: "heart.fill", title: "平均心率", tint: .pink,
                     value: HealthCardFormat.heartText(bpm: snapshot.avgHR),
-                    unit: snapshot.avgHR > 0 ? "次/分" : nil
+                    unit: snapshot.avgHR > 0 ? "次/分" : nil,
+                    showsSpinner: isGarminSyncing
                 )
                 HealthMetricCard(
                     icon: "waveform.path.ecg", title: "HRV", tint: .green,
                     value: hrvCard.value,
                     unit: hrvCard.unit,
-                    footnote: hrvCard.footnote
+                    footnote: hrvCard.footnote,
+                    showsSpinner: isGarminSyncing
                 )
                 HealthMetricCard(
                     icon: "battery.75percent", title: "身体电量", tint: .cyan,
                     value: batteryCard.value,
                     unit: batteryCard.unit,
-                    footnote: batteryCard.footnote
+                    footnote: batteryCard.footnote,
+                    showsSpinner: isGarminSyncing
                 )
                 HealthMetricCard(
                     icon: "brain.head.profile", title: "压力", tint: .mint,
                     value: stressCard.value,
                     unit: stressCard.unit,
-                    footnote: stressCard.footnote
+                    footnote: stressCard.footnote,
+                    showsSpinner: isGarminSyncing
                 )
             }
 
@@ -349,21 +403,18 @@ struct ExerciseView: View {
 
     // MARK: - 同步
 
-    /// 进入页面先取一次授权状态（供空态区分），再触发一次后台同步
-    ///（未请求授权时 syncRecent 内部直接跳过，不弹授权）
+    /// 进入页面先取一次授权状态（供空态区分），再触发一次前台同步（15 分钟防抖，
+    /// 未请求授权时协调器内部 HealthKit 分支先请求授权）
     private func triggerSync() {
         Task {
             authState = await HealthKitService().authorizationState()
-            await syncNow()
+            await SyncCoordinator.shared.sync(trigger: .foreground)
         }
     }
 
-    /// HealthKit 同步 + 已登录 Garmin 时追加 Garmin 后台同步（数据落快照，卡片经 @Query 自动刷新）
+    /// 下拉刷新 / 失败重试：手动同步，忽略防抖并重置熔断计数
     private func syncNow() async {
-        await HealthKitService().syncRecent(days: 7, context: modelContext)
-        if GarminTokenStore.shared.loadTokens() != nil {
-            await GarminSyncService().syncRecent(days: 7, context: modelContext)
-        }
+        await SyncCoordinator.shared.sync(trigger: .manual)
     }
 }
 
@@ -466,6 +517,8 @@ private struct HealthMetricCard: View {
     let value: String
     let unit: String?
     var footnote: String? = nil
+    /// 同步中在数值位置显示小转圈（隐藏原数值占位，避免布局跳动）
+    var showsSpinner: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -477,9 +530,16 @@ private struct HealthMetricCard: View {
                     .foregroundStyle(.secondary)
             }
             HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(value)
-                    .font(.title2.weight(.semibold))
-                    .monospacedDigit()
+                ZStack(alignment: .leading) {
+                    Text(value)
+                        .font(.title2.weight(.semibold))
+                        .monospacedDigit()
+                        .opacity(showsSpinner ? 0 : 1)
+                    if showsSpinner {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
                 if let unit {
                     Text(unit)
                         .font(.caption)
