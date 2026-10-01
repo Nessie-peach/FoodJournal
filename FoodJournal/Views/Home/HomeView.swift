@@ -52,7 +52,7 @@ struct HomeView: View {
     @State private var photoPickerItems: [PhotosPickerItem] = []
 
     /// 单次拍摄/多选的照片上限
-    private static let maxPhotoCount = 5
+    fileprivate static let maxPhotoCount = 5
 
     /// 已压缩、待识别/待保存的照片 JPEG Data（首图在前）
     @State private var pendingImages: [Data] = []
@@ -214,8 +214,9 @@ struct HomeView: View {
     /// sheet 保持呈现，相机取消（X）只收起相机，已拍照片全部保留
     private var photoConfirmSheet: some View {
         PhotoConfirmView(
-            images: pendingImages,
-            canAddMore: pendingImages.count < Self.maxPhotoCount,
+            // 传 Binding 而非值拷贝：确认页实时读取 pendingImages，
+            // 首拍追加后立即可见（值拷贝会停在呈现时的旧快照上）
+            images: $pendingImages,
             remark: $photoRemark,
             onRetake: { showRetakeCamera = true },
             onComplete: { completeCapture() },
@@ -373,9 +374,9 @@ struct HomeView: View {
 
     /// 追加待处理照片（超过上限截断）
     private func appendPendingImages(_ datas: [Data]) {
-        let space = Self.maxPhotoCount - pendingImages.count
-        guard space > 0 else { return }
-        pendingImages.append(contentsOf: datas.prefix(space))
+        pendingImages = CaptureFlowLogic.appendedPhotos(
+            current: pendingImages, new: datas, limit: Self.maxPhotoCount
+        )
     }
 
     /// 确认页「完成拍摄」：配置检查 → 发起识别（全部照片一次识别）
@@ -711,9 +712,10 @@ private struct MealRow: View {
 /// 拍摄/多选后的照片确认页：横向缩略图列表（可左滑查看、单张删除）+ 补拍/完成。
 /// 中途取消（含识别中取消）不丢已拍照片。
 private struct PhotoConfirmView: View {
-    let images: [Data]
+    /// 实时绑定宿主 pendingImages：追加/删除即时反映到确认页
+    @Binding var images: [Data]
     /// 未达上限时展示「再拍一张」
-    let canAddMore: Bool
+    private var canAddMore: Bool { images.count < HomeView.maxPhotoCount }
     /// 拍后备注（随「完成拍摄」传入识别流程）
     @Binding var remark: String
     let onRetake: () -> Void

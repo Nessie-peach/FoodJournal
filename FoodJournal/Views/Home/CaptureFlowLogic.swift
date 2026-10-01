@@ -31,4 +31,11 @@ enum CaptureFlowLogic {
             return didCaptureImage ? .confirmSheet : .main
         }
     }
+
+    /// 确认页应显示的照片列表：新照片追加到已有列表，超过上限时截断，已满则原样返回。
+    static func appendedPhotos(current: [Data], new: [Data], limit: Int) -> [Data] {
+        let space = limit - current.count
+        guard space > 0 else { return current }
+        return current + new.prefix(space)
+    }
 }
