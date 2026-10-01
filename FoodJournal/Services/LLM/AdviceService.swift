@@ -295,6 +295,7 @@ struct AdviceService {
 
     private static func fetchSnapshot(for date: Date, in context: ModelContext) -> DailyHealthSnapshot? {
         let calendar = Calendar.current
+        // 快照按自然日 key 存取：date 应传业务日锚点（00:00），取其自然日快照
         let start = calendar.startOfDay(for: date)
         guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return nil }
         let predicate = #Predicate<DailyHealthSnapshot> { snapshot in
@@ -309,8 +310,10 @@ struct AdviceService {
 
     private static func fetchMeals(for date: Date, in context: ModelContext) -> [Meal] {
         let calendar = Calendar.current
-        let start = calendar.startOfDay(for: date)
-        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return [] }
+        // 餐按业务日归属：04:00 → 次日 04:00
+        let range = LogicalDay.businessDayRange(of: date, calendar: calendar)
+        let start = range.start
+        let end = range.end
         let predicate = #Predicate<Meal> { meal in
             meal.date >= start && meal.date < end
         }

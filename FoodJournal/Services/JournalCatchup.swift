@@ -20,11 +20,13 @@ enum JournalCatchup {
     @MainActor
     static func runIfNeeded(context: ModelContext) async {
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: .now)
+        // 业务日口径：今天 = 当前业务日锚点；「昨天」= 前一业务日（凌晨 04:00 前
+        // 当前业务日仍是昨天，此时「昨天」= 前天）
+        let today = LogicalDay.businessDay(of: .now, calendar: calendar)
         if lastAttemptDay == today { return }
         lastAttemptDay = today
 
-        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: .now) else { return }
+        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: today) else { return }
         do {
             let adviceRepository = AdviceRepository(context: context)
             let hasAdvice = try adviceRepository.advice(for: yesterday, channel: DailyAdvice.Channel.journal) != nil
@@ -61,11 +63,13 @@ enum JournalCatchup {
         }
     }
 
-    /// 某天餐记录数（仅用于判定「有无数据」，count 1 条即止）
+    /// 某业务日的餐记录数（仅用于判定「有无数据」，count 1 条即止）
     private static func mealCount(on date: Date, in context: ModelContext) throws -> Int {
         let calendar = Calendar.current
-        let start = calendar.startOfDay(for: date)
-        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return 0 }
+        // date 为业务日锚点：按业务日区间 04:00 → 次日 04:00 计数
+        let range = LogicalDay.businessDayRange(of: date, calendar: calendar)
+        let start = range.start
+        let end = range.end
         let startCopy = start
         let endCopy = end
         let predicate = #Predicate<Meal> { meal in

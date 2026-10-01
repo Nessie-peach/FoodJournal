@@ -96,24 +96,31 @@ struct HomeView: View {
 
     init(selectedTab: Binding<AppTab>) {
         _selectedTab = selectedTab
-        // 今日范围（含边界当天全天）
         let calendar = Calendar.current
-        let start = calendar.startOfDay(for: .now)
-        let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start
+        // 今日业务日区间（04:00 分界：当天 04:00 → 次日 04:00）
+        let businessRange = LogicalDay.businessDayRange(of: .now, calendar: calendar)
+        let start = businessRange.start
+        let end = businessRange.end
         _todayMeals = Query(
             filter: #Predicate<Meal> { meal in
                 meal.date >= start && meal.date < end
             },
             sort: [SortDescriptor(\.date, order: .reverse)]
         )
+        // 今日消耗快照：快照按自然日 key 存取，凌晨窗口（00:00–04:00）取前一自然日（方案 A）
+        let burnDayStart = LogicalDay.burnSnapshotDay(for: .now, calendar: calendar)
+        let burnDayEnd = calendar.date(byAdding: .day, value: 1, to: burnDayStart) ?? burnDayStart
         _todaySnapshots = Query(
             filter: #Predicate<DailyHealthSnapshot> { snapshot in
-                snapshot.date >= start && snapshot.date < end
+                snapshot.date >= burnDayStart && snapshot.date < burnDayEnd
             },
             sort: [SortDescriptor(\.date, order: .reverse)]
         )
-        // 近三天：前天 0 点至明天 0 点（趋势表卡）
-        let threeDayStart = calendar.date(byAdding: .day, value: -2, to: start) ?? start
+        // 近三个业务日（趋势表卡）：最早业务日锚点前推 2 个日历日；
+        // 查询起点用自然日 0 点（略宽于业务日 04:00，归属由 TrendPreview 按业务日判定）
+        let todayAnchor = LogicalDay.businessDay(of: .now, calendar: calendar)
+        let threeDayAnchor = calendar.date(byAdding: .day, value: -2, to: todayAnchor) ?? todayAnchor
+        let threeDayStart = calendar.startOfDay(for: threeDayAnchor)
         _recentMeals = Query(
             filter: #Predicate<Meal> { meal in
                 meal.date >= threeDayStart && meal.date < end
@@ -312,7 +319,8 @@ struct HomeView: View {
                     consumedKcal: todayMeals.reduce(0) { $0 + $1.totalCalories },
                     goalKcal: gapGoalKcal,
                     isGarminSyncing: SyncStatusStore.shared.isSyncing
-                        && SyncStatusStore.shared.currentSources.contains(.garmin)
+                        && SyncStatusStore.shared.currentSources.contains(.garmin),
+                    showsBurnCutoffNote: LogicalDay.isInLateNightWindow(now: .now)
                 )
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
@@ -587,6 +595,7 @@ private struct SummaryBar: View {
 
 /// 今日热量缺口：总消耗（活动+静息）/ 已摄入 / 当前缺口 / 距目标 / 当量提示。
 /// 无当日快照时走「待同步」空态（其余行弱化）；@Query 快照与今日餐变化自动重算。
+/// 凌晨窗口（00:00–04:00）消耗取前一自然日（方案 A），显示「消耗截至 24:00」小字。
 private struct CalorieGapCard: View {
     /// 当日总消耗（活动+静息，kcal）；nil = 未同步/无数据
     let totalBurnedKcal: Double?
@@ -594,6 +603,8 @@ private struct CalorieGapCard: View {
     let goalKcal: Double
     /// 同步中且含 Garmin 来源：消耗行显示小转圈（未登录 Garmin 时不转，维持「待同步」）
     var isGarminSyncing: Bool = false
+    /// 凌晨窗口小字：消耗数据截至前一自然日 24:00
+    var showsBurnCutoffNote: Bool = false
 
     private var result: CalorieGap.Result? {
         CalorieGap.evaluate(
@@ -628,6 +639,11 @@ private struct CalorieGapCard: View {
                 metric(value: burned, label: "今日总消耗", showsSpinner: isGarminSyncing)
                 metric(value: consumed, label: "已摄入")
                 metric(value: burned - consumed, label: "当前缺口")
+            }
+            if showsBurnCutoffNote {
+                Text("消耗截至 24:00")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
             goalLine(result.goalStatus)
             hintLine(result.hint)

@@ -64,18 +64,26 @@ final class HistoryGroupingTests: XCTestCase {
     // MARK: 饮食按日分组
 
     func testGroupMealsCrossMonthBoundaryNotMixed() {
-        // 9/30 深夜 与 10/1 凌晨 不混到同一天
+        // 业务日口径（04:00 分界）：9/30 深夜 23:30 与 10/1 凌晨 00:30 同属 9/30 业务日
         let meals = [
             meal(2026, 9, 30, hour: 23, minute: 30, name: "夜宵"),
             meal(2026, 10, 1, hour: 0, minute: 30, name: "凌晨加餐"),
         ]
         let groups = HistoryGrouping.groupMealsByDay(meals)
-        XCTAssertEqual(groups.count, 2)
-        // 倒序：10/1 在前
-        XCTAssertTrue(calendar.isDate(groups[0].date, inSameDayAs: date(2026, 10, 1)))
-        XCTAssertEqual(groups[0].meals.first?.name, "凌晨加餐")
-        XCTAssertTrue(calendar.isDate(groups[1].date, inSameDayAs: date(2026, 9, 30)))
-        XCTAssertEqual(groups[1].meals.first?.name, "夜宵")
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertTrue(calendar.isDate(groups[0].date, inSameDayAs: date(2026, 9, 30)))
+        XCTAssertEqual(groups[0].meals.count, 2)
+        // 业务日边界 04:00 才切分：9/30 03:00 归 9/29 业务日，与 9/30 晚餐不混
+        let boundaryMeals = [
+            meal(2026, 9, 30, hour: 3, name: "凌晨（归 9/29）"),
+            meal(2026, 9, 30, hour: 22, name: "晚餐（归 9/30）"),
+        ]
+        let boundaryGroups = HistoryGrouping.groupMealsByDay(boundaryMeals)
+        XCTAssertEqual(boundaryGroups.count, 2)
+        XCTAssertTrue(calendar.isDate(boundaryGroups[0].date, inSameDayAs: date(2026, 9, 30)))
+        XCTAssertEqual(boundaryGroups[0].meals.first?.name, "晚餐（归 9/30）")
+        XCTAssertTrue(calendar.isDate(boundaryGroups[1].date, inSameDayAs: date(2026, 9, 29)))
+        XCTAssertEqual(boundaryGroups[1].meals.first?.name, "凌晨（归 9/29）")
     }
 
     func testGroupMealsSingleDayMultipleMealsWithTotal() {
