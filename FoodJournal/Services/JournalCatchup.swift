@@ -44,7 +44,7 @@ enum JournalCatchup {
                   let apiKey = KeychainStore.advice.load() else { return }
 
             let content = try await AdviceService().generateAdvice(
-                date: yesterday,
+                businessDay: yesterday,
                 context: context,
                 config: config,
                 apiKey: apiKey,
@@ -66,8 +66,9 @@ enum JournalCatchup {
     /// 某业务日的餐记录数（仅用于判定「有无数据」，count 1 条即止）
     private static func mealCount(on date: Date, in context: ModelContext) throws -> Int {
         let calendar = Calendar.current
-        // date 为业务日锚点：按业务日区间 04:00 → 次日 04:00 计数
-        let range = LogicalDay.businessDayRange(of: date, calendar: calendar)
+        // date 为业务日锚点：直接经锚点换算区间（04:00 → 次日 04:00），
+        // 不可再过 businessDayRange(of:)（锚点 hour < 4 会被二次减一天）
+        let range = LogicalDay.businessDayRange(forAnchor: date, calendar: calendar)
         let start = range.start
         let end = range.end
         let startCopy = start

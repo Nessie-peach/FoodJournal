@@ -313,7 +313,7 @@ struct JournalView: View {
         generationTask = Task {
             do {
                 let content = try await AdviceService().generateAdvice(
-                    date: adviceDay,
+                    businessDay: adviceDay,
                     context: context,
                     config: config,
                     apiKey: apiKey,

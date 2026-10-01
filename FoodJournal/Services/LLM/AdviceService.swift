@@ -32,14 +32,16 @@ enum AdviceError: LocalizedError, Equatable {
 struct AdviceService {
     /// 建议 system prompt（定稿，勿改动）
     static let systemPrompt =
-        "你是用户的私人健康助手。根据提供的当日健康数据、饮食记录与体重趋势，输出中文健康建议，分四个部分：一、当日概况（两三句话总结饮食与运动平衡）；二、做得好的点（一两句，实事求是，没有亮点就说没有）；三、分维度建议（睡眠、运动、饮食各一条，具体可执行，结合数据）；四、心理关怀（若睡眠不足 6.5 小时或数据透露压力大/状态差，给一段简短温暖的宽慰；状态平稳则一两句正向鼓励即可，不煽情）。数据缺失的维度直接说明并跳过对应建议，不要编造数值。"
+        "你是用户的私人健康助手。根据提供的当日健康数据、饮食记录与体重趋势，输出中文健康建议，分四个部分：一、当日概况（两三句话总结饮食与运动平衡）；二、做得好的点（一两句，实事求是，没有亮点就说没有）；三、分维度建议（睡眠、运动、饮食各一条，具体可执行，结合数据）；四、心理关怀（若睡眠不足 6.5 小时或数据透露压力大/状态差，给一段简短温暖的宽慰；状态平稳则一两句正向鼓励即可，不煽情）。数据缺失的维度直接说明并跳过对应建议，不要编造数值。数据行均已标注日期与时间段，请严格按标注措辞，不要使用『昨晚』『今天』等相对表述替代具体日期（例如应写『10/1 凌晨 02:33 入睡』）。"
 
     /// 请求超时（秒）
     static let timeoutInterval: TimeInterval = 45
 
     /// 生成健康建议。
     /// - Parameters:
-    ///   - date: 建议对应的日期（默认当天）
+    ///   - businessDay: 建议对应的业务日**锚点**（该业务日的日历日 00:00；凌晨 04:00 前
+    ///     为前一自然日锚点）。取餐 / 快照 / 体重均按此锚点换算，调用方勿传其他时刻，
+    ///     避免对已偏移的锚点再次做业务日归属（会二次减一天）。
     ///   - context: SwiftData 上下文（读快照 / 饮食 / 体重）
     ///   - config: LLM 接入配置（建议模型那份；BaseURL / 模型 ID）
     ///   - apiKey: API Key（仅用于 Authorization 头，绝不进入错误信息）
@@ -47,7 +49,7 @@ struct AdviceService {
     ///   - journalText: 小记全文；仅 journal 渠道打包进数据段（无小记传 nil，标「无数据」）
     @MainActor
     func generateAdvice(
-        date: Date = .now,
+        businessDay: Date,
         context: ModelContext,
         config: LLMProviderConfig,
         apiKey: String,
@@ -55,11 +57,12 @@ struct AdviceService {
         journalText: String? = nil
     ) async throws -> String {
         let userText = Self.packContextText(
-            snapshot: Self.fetchSnapshot(for: date, in: context),
-            meals: Self.fetchMeals(for: date, in: context),
-            weights: Self.fetchRecentWeights(before: date, days: 7, in: context),
+            snapshot: Self.fetchSnapshot(for: businessDay, in: context),
+            meals: Self.fetchMeals(businessDay: businessDay, in: context),
+            weights: Self.fetchRecentWeights(before: businessDay, days: 7, in: context),
             includesJournalSection: channel == DailyAdvice.Channel.journal,
-            journalText: journalText
+            journalText: journalText,
+            businessDayAnchor: businessDay
         )
         return try await request(userText: userText, config: config, apiKey: apiKey)
     }
@@ -69,23 +72,33 @@ struct AdviceService {
     /// 打包建议用上下文文本；缺失维度明确标注「无数据」，不编造。
     /// includesJournalSection 为 true 时（journal 渠道）追加【今日小记】段：
     /// 有小记打全文，无小记（journalText 为 nil 或空白）标「无数据」。
+    /// businessDayAnchor 非空时（生产路径）为数据行补明确日期与时间段标注，
+    /// 让模型按具体日期措辞而非「昨晚 / 今天」等相对表述。
     /// internal 以便单测覆盖有/无快照、无饮食、无体重、有/无小记各分支。
     nonisolated static func packContextText(
         snapshot: DailyHealthSnapshot?,
         meals: [Meal],
         weights: [WeightRecord],
         includesJournalSection: Bool = false,
-        journalText: String? = nil
+        journalText: String? = nil,
+        businessDayAnchor: Date? = nil
     ) -> String {
         var lines: [String] = []
+        let dayLabel = businessDayAnchor.map(Self.shortDayText)
+        let mealHeader = dayLabel.map { "【\($0) 饮食（业务日 04:00–次日 03:59）】" } ?? "【今日饮食】"
 
         if let snapshot {
             lines.append("【当日健康数据】")
-            lines.append("活动消耗：\(Int(snapshot.activeKcal.rounded())) 千卡；静息消耗：\(Int(snapshot.restingKcal.rounded())) 千卡")
+            let activeSuffix = dayLabel.map { "（\($0) 全天）" } ?? ""
+            lines.append("活动消耗：\(Int(snapshot.activeKcal.rounded())) 千卡\(activeSuffix)；静息消耗：\(Int(snapshot.restingKcal.rounded())) 千卡")
             if snapshot.sleepMinutes > 0 {
                 var sleep = "睡眠：\(HealthCardFormat.sleepText(minutes: snapshot.sleepMinutes))"
                 if let start = snapshot.sleepStart, let end = snapshot.sleepEnd {
-                    sleep += "（\(HealthCardFormat.clockText(start)) 入睡，\(HealthCardFormat.clockText(end)) 起床）"
+                    if let dayLabel {
+                        sleep += "（\(dayLabel) \(HealthCardFormat.clockText(start)) 入睡，\(Self.shortDayText(end)) \(HealthCardFormat.clockText(end)) 起床）"
+                    } else {
+                        sleep += "（\(HealthCardFormat.clockText(start)) 入睡，\(HealthCardFormat.clockText(end)) 起床）"
+                    }
                 }
                 lines.append(sleep)
             } else {
@@ -93,7 +106,8 @@ struct AdviceService {
             }
             lines.append(snapshot.avgHR > 0 ? "平均心率：\(Int(snapshot.avgHR.rounded())) 次/分" : "平均心率：无数据")
             if let lastNight = snapshot.hrvLastNightAvg {
-                var hrv = "HRV：昨晚平均 \(Int(lastNight.rounded())) ms（佳明）"
+                var hrv = dayLabel.map { "HRV：\($0) 夜间平均 " } ?? "HRV：昨晚平均 "
+                hrv += "\(Int(lastNight.rounded())) ms（佳明）"
                 if let low = snapshot.hrvBaselineLow, let high = snapshot.hrvBaselineHigh {
                     let vs = lastNight < low ? "低于" : lastNight > high ? "高于" : "处于"
                     hrv += "，基线 \(Int(low))-\(Int(high)) ms（\(vs)基线）"
@@ -148,9 +162,9 @@ struct AdviceService {
 
         lines.append("")
         if meals.isEmpty {
-            lines.append("【今日饮食】无饮食记录")
+            lines.append("\(mealHeader)无饮食记录")
         } else {
-            lines.append("【今日饮食】")
+            lines.append(mealHeader)
             let names = meals.map { meal in
                 "\(meal.type?.displayName ?? "加餐")「\(meal.name)」"
             }
@@ -295,7 +309,8 @@ struct AdviceService {
 
     private static func fetchSnapshot(for date: Date, in context: ModelContext) -> DailyHealthSnapshot? {
         let calendar = Calendar.current
-        // 快照按自然日 key 存取：date 应传业务日锚点（00:00），取其自然日快照
+        // 快照按自然日 key 存取：date 应传业务日锚点（00:00），取其自然日快照，
+        // 不在 AdviceService 内做二次偏移（凌晨窗口的归属已由锚点体现）
         let start = calendar.startOfDay(for: date)
         guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return nil }
         let predicate = #Predicate<DailyHealthSnapshot> { snapshot in
@@ -308,10 +323,13 @@ struct AdviceService {
         return try? context.fetch(descriptor).first
     }
 
-    private static func fetchMeals(for date: Date, in context: ModelContext) -> [Meal] {
+    /// 按业务日锚点取餐：区间 = [锚点日 04:00, 次日 04:00)，与近三天表 / 今日记录口径一致。
+    /// 注意入参是锚点（00:00），直接经 `businessDayRange(forAnchor:)` 换算，
+    /// 不可再过 `businessDayRange(of:)`（锚点 hour < 4 会被二次减一天）。
+    /// internal 以便单测验证凌晨 / 白天两种生成时刻的取餐口径。
+    nonisolated static func fetchMeals(businessDay anchor: Date, in context: ModelContext) -> [Meal] {
         let calendar = Calendar.current
-        // 餐按业务日归属：04:00 → 次日 04:00
-        let range = LogicalDay.businessDayRange(of: date, calendar: calendar)
+        let range = LogicalDay.businessDayRange(forAnchor: anchor, calendar: calendar)
         let start = range.start
         let end = range.end
         let predicate = #Predicate<Meal> { meal in
@@ -365,6 +383,14 @@ struct AdviceService {
     private static func dayText(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "MM-dd"
+        formatter.locale = Locale(identifier: "zh_CN")
+        return formatter.string(from: date)
+    }
+
+    /// 日期 →「M/d」（固定 locale，结果稳定；数据行日期标注用，如 10/1）
+    private static func shortDayText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M/d"
         formatter.locale = Locale(identifier: "zh_CN")
         return formatter.string(from: date)
     }
