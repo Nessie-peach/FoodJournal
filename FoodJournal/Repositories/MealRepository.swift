@@ -60,13 +60,4 @@ final class MealRepository: MealRepositoryProtocol {
         let descriptor = FetchDescriptor<Meal>(predicate: predicate, sortBy: [SortDescriptor(\.date)])
         return try context.fetch(descriptor)
     }
-
-    /// 全部记录天数（去重）：历史入口「共 N 天」用。
-    /// propertiesToFetch 仅取 date 列，避免加载照片大字段
-    func recordedDayCount() -> Int {
-        var descriptor = FetchDescriptor<Meal>()
-        descriptor.propertiesToFetch = [\.date]
-        let dates = (try? context.fetch(descriptor).map(\.date)) ?? []
-        return HistoryGrouping.recordedDayCount(dates: dates)
-    }
 }
