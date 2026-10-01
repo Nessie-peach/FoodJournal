@@ -60,4 +60,24 @@ enum LogicalDay {
         }
         return previousCalendarDay(of: date, calendar: calendar)
     }
+
+    /// 历史页补记录的预设日期（纯函数便于单测）：
+    /// 默认把当前时刻的**时分秒**拼到目标业务日锚点上（如 10/2 15:00 补录 9/30 → 9/30 15:00）；
+    /// **边界补丁**：若当前时分 < 04:00（拼上后会归属到目标日的前一天），
+    /// 改用目标业务日 **12:00**（如 10/2 01:30 补录 9/30 → 9/30 12:00）。
+    /// 04:00 整不触发补丁（归属已落在目标日当天）。
+    static func backfillPresetDate(
+        targetDay: Date, now: Date, calendar: Calendar = .current
+    ) -> Date {
+        let hour = calendar.component(.hour, from: now)
+        guard hour >= boundaryHour else {
+            return calendar.date(bySettingHour: 12, minute: 0, second: 0, of: targetDay) ?? targetDay
+        }
+        var offset = DateComponents()
+        offset.hour = hour
+        offset.minute = calendar.component(.minute, from: now)
+        offset.second = calendar.component(.second, from: now)
+        let dayStart = calendar.startOfDay(for: targetDay)
+        return calendar.date(byAdding: offset, to: dayStart) ?? dayStart
+    }
 }

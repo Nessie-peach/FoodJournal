@@ -221,4 +221,56 @@ final class LogicalDayTests: XCTestCase {
         XCTAssertEqual(points.count, 1)
         XCTAssertEqual(points[0].intakeKcal, 250, accuracy: 0.01)
     }
+
+    // MARK: 补记录预设日期
+
+    /// 凌晨 01:30 补录 9/30：01:30 < 04:00 会归属到目标日的前一天 → 退化用 9/30 12:00
+    func testBackfillPresetDateLateNightFallsBackToNoon() {
+        let target = anchor(2026, 9, 30)
+        let now = date(2026, 10, 2, hour: 1, minute: 30)
+        let preset = LogicalDay.backfillPresetDate(targetDay: target, now: now, calendar: calendar)
+        XCTAssertEqual(preset, date(2026, 9, 30, hour: 12))
+    }
+
+    /// 白天 15:00 补录 9/30：把当前时分秒拼到目标业务日 → 9/30 15:00
+    func testBackfillPresetDateDaytimeKeepsCurrentTimeOfDay() {
+        let target = anchor(2026, 9, 30)
+        let now = date(2026, 10, 2, hour: 15)
+        let preset = LogicalDay.backfillPresetDate(targetDay: target, now: now, calendar: calendar)
+        XCTAssertEqual(
+            calendar.dateComponents([.hour, .minute, .second], from: preset),
+            calendar.dateComponents([.hour, .minute, .second], from: now)
+        )
+        XCTAssertTrue(calendar.isDate(preset, inSameDayAs: date(2026, 9, 30)))
+    }
+
+    /// 03:59 仍触发补丁（< 04:00）→ 目标业务日 12:00
+    func testBackfillPresetDateAt0359FallsBackToNoon() {
+        let target = anchor(2026, 9, 30)
+        let now = date(2026, 10, 2, hour: 3, minute: 59)
+        let preset = LogicalDay.backfillPresetDate(targetDay: target, now: now, calendar: calendar)
+        XCTAssertEqual(preset, date(2026, 9, 30, hour: 12))
+    }
+
+    /// 04:00 整为边界：不触发补丁 → 9/30 04:00
+    func testBackfillPresetDateAt0400ExactlyKeepsTime() {
+        let target = anchor(2026, 9, 30)
+        let now = date(2026, 10, 2, hour: 4, minute: 0)
+        let preset = LogicalDay.backfillPresetDate(targetDay: target, now: now, calendar: calendar)
+        XCTAssertEqual(preset, date(2026, 9, 30, hour: 4))
+    }
+
+    /// 预设日期归属业务日正确：无论何时补录，预设时刻的业务日都等于目标日
+    func testBackfillPresetDateBelongsToTargetBusinessDay() {
+        let target = anchor(2026, 9, 30)
+        for hour in [1, 3, 4, 12, 23] {
+            let now = date(2026, 10, 2, hour: hour, minute: 17)
+            let preset = LogicalDay.backfillPresetDate(targetDay: target, now: now, calendar: calendar)
+            XCTAssertEqual(
+                LogicalDay.businessDay(of: preset, calendar: calendar),
+                target,
+                "hour=\(hour) 的预设时刻应归属目标业务日 9/30"
+            )
+        }
+    }
 }

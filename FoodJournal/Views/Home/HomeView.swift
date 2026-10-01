@@ -84,10 +84,16 @@ struct HomeView: View {
     @State private var showSettings = false
     @State private var editRoute: EditRoute?
 
+    /// 历史页补记录的预设日期（nil = 今日页发起的正常流程）；
+    /// 识别/手动记录进入编辑页时写入该日期，用后即清
+    @State private var historyPresetDate: Date?
+
     /// 跳转 MealEditView 的路由参数（Hashable 以配合 navigationDestination(item:)）
     struct EditRoute: Hashable {
         var prefill: MealEditView.Prefill
         var focusName: Bool
+        /// 历史页补记录的预设日期（nil = 用当前时间）
+        var presetDate: Date?
     }
 
     private var cameraAvailable: Bool {
@@ -136,18 +142,22 @@ struct HomeView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            captureFlowPresentations(content: mainPage)
-                .sheet(isPresented: $showSettings) {
-                    SettingsView()
-                }
-        }
+        // 识别遮罩与告警挂在 NavigationStack 外层：从历史页发起补记录识别时，
+        // 覆盖层仍能盖住已 push 的历史页（挂在栈内根视图上会被 push 内容遮挡）
+        recognitionAlerts(content:
+            NavigationStack {
+                captureFlowPresentations(content: mainPage)
+                    .sheet(isPresented: $showSettings) {
+                        SettingsView()
+                    }
+            }
+        )
     }
 
     // MARK: - 主页面（内容 + 弹窗）
 
     private var mainPage: some View {
-        recognitionAlerts(content: todayContent)
+        todayContent
     }
 
     private var todayContent: some View {
@@ -170,7 +180,16 @@ struct HomeView: View {
             MealEditView(prefill: route.prefill, focusNameOnAppear: route.focusName)
         }
         .navigationDestination(isPresented: $showDietHistory) {
-            DietHistoryView()
+            DietHistoryView(
+                onCapture: { presetDate in
+                    historyPresetDate = presetDate
+                    showCamera = true
+                },
+                onPickPhotos: { presetDate in
+                    historyPresetDate = presetDate
+                    showPhotoPicker = true
+                }
+            )
         }
         .toolbar { toolbarItems }
     }
@@ -181,9 +200,15 @@ struct HomeView: View {
     private var toolbarItems: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             Menu {
-                Button("拍照") { showCamera = true }
-                    .disabled(!cameraAvailable)
-                Button("从相册选择") { showPhotoPicker = true }
+                Button("拍照") {
+                    historyPresetDate = nil
+                    showCamera = true
+                }
+                .disabled(!cameraAvailable)
+                Button("从相册选择") {
+                    historyPresetDate = nil
+                    showPhotoPicker = true
+                }
             } label: {
                 Image(systemName: "camera.fill")
             }
@@ -449,7 +474,8 @@ struct HomeView: View {
                     imageDatas: images, remark: remark, config: config, apiKey: apiKey
                 )
                 guard !Task.isCancelled else { return }
-                // 识别成功：立即跳编辑页（识别模式），首图作封面、焦点落餐名
+                // 识别成功：立即跳编辑页（识别模式），首图作封面、焦点落餐名；
+                // 历史页补记录时预设日期为该历史业务日
                 editRoute = EditRoute(
                     prefill: MealEditView.Prefill(
                         name: result.mealName,
@@ -457,8 +483,10 @@ struct HomeView: View {
                         photoData: images.first,
                         additionalPhotos: Array(images.dropFirst())
                     ),
-                    focusName: true
+                    focusName: true,
+                    presetDate: historyPresetDate
                 )
+                historyPresetDate = nil
                 pendingImages = []
                 photoRemark = ""
             } catch is CancellationError {
@@ -498,8 +526,10 @@ struct HomeView: View {
                 photoData: pendingImages.first,
                 additionalPhotos: Array(pendingImages.dropFirst())
             ),
-            focusName: true
+            focusName: true,
+            presetDate: historyPresetDate
         )
+        historyPresetDate = nil
         pendingImages = []
         photoRemark = ""
     }

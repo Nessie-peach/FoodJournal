@@ -14,6 +14,13 @@ struct DietHistoryView: View {
     @State private var expandedDay: Date?
     /// 展开菜品明细的餐
     @State private var expandedMealIDs: Set<UUID> = []
+    /// 手动补录的编辑页路由（item = 预设日期）
+    @State private var manualEditDate: Date?
+
+    /// 历史页补记录回调：拍照 / 从图片选择（由宿主 HomeView 复用现有识别流程，
+    /// 入参为该卡片的预设日期）；nil 时对应选项不显示
+    var onCapture: ((Date) -> Void)?
+    var onPickPhotos: ((Date) -> Void)?
 
     private var calendar: Calendar { Calendar.current }
 
@@ -50,6 +57,9 @@ struct DietHistoryView: View {
         }
         .navigationTitle("饮食历史")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $manualEditDate) { presetDate in
+            MealEditView(initialDate: presetDate)
+        }
         .sheet(isPresented: $showDatePicker) {
             datePickerSheet
         }
@@ -148,9 +158,51 @@ struct DietHistoryView: View {
                 dayHeader(group)
                 if expandedDay == group.date {
                     mealRows(group)
+                    addRecordRow(group)
                 }
             }
         }
+    }
+
+    // MARK: - 补记录入口（R9-2）
+
+    /// 「＋ 添加记录」行：仅展开态显示；点击弹三选项菜单，
+    /// 预设日期 = 该卡片业务日（凌晨时刻自动退化为 12:00，见 LogicalDay.backfillPresetDate）
+    private func addRecordRow(_ group: HistoryGrouping.DayMeals) -> some View {
+        Menu {
+            if let onCapture {
+                Button {
+                    onCapture(backfillPresetDate(for: group))
+                } label: {
+                    Label("拍照", systemImage: "camera")
+                }
+            }
+            if let onPickPhotos {
+                Button {
+                    onPickPhotos(backfillPresetDate(for: group))
+                } label: {
+                    Label("从图片选择", systemImage: "photo.on.rectangle")
+                }
+            }
+            Button {
+                manualEditDate = backfillPresetDate(for: group)
+            } label: {
+                Label("手动添加", systemImage: "square.and.pencil")
+            }
+        } label: {
+            Label("添加记录", systemImage: "plus")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(minHeight: 36)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("为\(Self.dayText(group.date))添加记录")
+    }
+
+    /// 该卡片业务日的补记录预设日期：当前时分秒拼到目标日，< 04:00 用 12:00
+    private func backfillPresetDate(for group: HistoryGrouping.DayMeals) -> Date {
+        LogicalDay.backfillPresetDate(targetDay: group.date, now: .now, calendar: calendar)
     }
 
     private func dayHeader(_ group: HistoryGrouping.DayMeals) -> some View {

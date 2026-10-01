@@ -116,17 +116,27 @@ struct MealEditView: View {
         if itemDrafts.isEmpty { _itemDrafts = State(initialValue: [ItemDraft()]) }
     }
 
-    /// 识别模式：识图结果预填，餐段/时间按当前时间推断
-    init(prefill: Prefill, focusNameOnAppear: Bool) {
+    /// 识别模式：识图结果预填，餐段/时间按预设日期（nil 则当前时间）推断。
+    /// presetDate 用于历史页补记录：新记录归属该历史业务日。
+    init(prefill: Prefill, focusNameOnAppear: Bool, presetDate: Date? = nil) {
         editingMeal = nil
         self.focusNameOnAppear = focusNameOnAppear
-        let now = Date.now
-        _mealType = State(initialValue: MealType.from(date: now))
-        _date = State(initialValue: now)
+        let base = presetDate ?? Date.now
+        _mealType = State(initialValue: MealType.from(date: base))
+        _date = State(initialValue: base)
         _name = State(initialValue: prefill.name)
         _photoData = State(initialValue: prefill.photoData)
         _additionalPhotos = State(initialValue: prefill.additionalPhotos)
         _itemDrafts = State(initialValue: prefill.items.isEmpty ? [ItemDraft()] : prefill.items)
+    }
+
+    /// 手动补录模式：空白表单，日期预设为该历史业务日换算后的初始时刻
+    init(initialDate: Date) {
+        editingMeal = nil
+        focusNameOnAppear = false
+        _mealType = State(initialValue: MealType.from(date: initialDate))
+        _date = State(initialValue: initialDate)
+        _itemDrafts = State(initialValue: [ItemDraft()])
     }
 
     // MARK: - Body
