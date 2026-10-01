@@ -78,6 +78,9 @@ struct HomeView: View {
     @State private var showSettings = false
     @State private var editRoute: EditRoute?
 
+    /// 历史入口「共 N 天」：全部记录去重天数（进入页面时统计一次）
+    @State private var totalDietDays = 0
+
     /// 跳转 MealEditView 的路由参数（Hashable 以配合 navigationDestination(item:)）
     struct EditRoute: Hashable {
         var prefill: MealEditView.Prefill
@@ -143,6 +146,11 @@ struct HomeView: View {
             MealEditView(prefill: route.prefill, focusNameOnAppear: route.focusName)
         }
         .toolbar { toolbarItems }
+        .onAppear { loadTotalDietDays() }
+    }
+
+    private func loadTotalDietDays() {
+        totalDietDays = MealRepository(context: modelContext).recordedDayCount()
     }
 
     // MARK: - 顶栏
@@ -281,6 +289,20 @@ struct HomeView: View {
                 SummaryBar(meals: todayMeals)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
+            }
+
+            Section {
+                NavigationLink {
+                    DietHistoryView()
+                } label: {
+                    HStack {
+                        Spacer()
+                        Text("查看饮食历史（共 \(totalDietDays) 天）")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .listRowBackground(Color.clear)
             }
 
             Section {

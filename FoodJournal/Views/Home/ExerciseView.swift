@@ -77,6 +77,8 @@ struct ExerciseView: View {
                 }
                 .frame(maxWidth: .infinity)
 
+                historyEntry
+
                 adviceCard
             }
             .frame(maxWidth: .infinity)
@@ -258,6 +260,23 @@ struct ExerciseView: View {
 
     private var emptyStateButtonTitle: String {
         authState == .notDetermined ? "去授权" : "去设置"
+    }
+
+    // MARK: - 历史入口
+
+    /// 四卡片之后 → 锻炼历史页（只读）
+    private var historyEntry: some View {
+        NavigationLink {
+            ExerciseHistoryView()
+        } label: {
+            HStack {
+                Spacer()
+                Text("查看锻炼历史")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+        }
     }
 
     // MARK: - AI 健康建议卡
