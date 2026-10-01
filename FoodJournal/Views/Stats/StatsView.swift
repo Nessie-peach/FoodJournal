@@ -17,12 +17,18 @@ struct StatsView: View {
         StatsAggregation.dateRange(for: granularity, anchor: anchorDate, calendar: calendar)
     }
 
+    /// 区间内餐记录：按业务日归属（凌晨 04:00 前算前一业务日）
     private var rangeMeals: [Meal] {
-        meals.filter { $0.date >= range.start && $0.date < range.end }
+        let dayAnchors = Set(range.days)
+        return meals.filter {
+            dayAnchors.contains(LogicalDay.businessDay(of: $0.date, calendar: calendar))
+        }
     }
 
+    /// 区间内健康快照：快照按自然日聚合，按自然日锚点匹配
     private var rangeSnapshots: [DailyHealthSnapshot] {
-        snapshots.filter { $0.date >= range.start && $0.date < range.end }
+        let dayAnchors = Set(range.days)
+        return snapshots.filter { dayAnchors.contains(calendar.startOfDay(for: $0.date)) }
     }
 
     private var points: [StatsAggregation.DailyPoint] {

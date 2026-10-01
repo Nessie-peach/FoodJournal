@@ -6,7 +6,8 @@ enum HistoryGrouping {
 
     // MARK: - 饮食
 
-    /// 按日分组的饮食卡片：date 为当日 startOfDay，meals 按用餐时间升序
+    /// 按日分组的饮食卡片：date 为业务日锚点（04:00 分界，凌晨 04:00 前算前一业务日），
+    /// meals 按用餐时间升序
     struct DayMeals: Identifiable {
         let date: Date
         let meals: [Meal]
@@ -36,34 +37,35 @@ enum HistoryGrouping {
         }
     }
 
-    /// 月份半开区间 [start, end)：复用统计页的月份口径（1 日 0 点至次月 1 日 0 点）
+    /// 月份半开区间 [start, end)：复用统计页的月份口径（自然月 1 日 0 点至次月 1 日 0 点）。
+    /// 月导航保留自然月；月内分组的归属由 groupMealsByDay 按业务日判定
     static func monthRange(for date: Date, calendar: Calendar = .current) -> (start: Date, end: Date) {
         let range = StatsAggregation.dateRange(for: .month, anchor: date, calendar: calendar)
         return (range.start, range.end)
     }
 
-    /// 按日分组（倒序）；同日内按用餐时间升序
+    /// 按业务日分组（倒序）；同业务日内按用餐时间升序（凌晨 04:00 前归前一业务日）
     static func groupMealsByDay(_ meals: [Meal], calendar: Calendar = .current) -> [DayMeals] {
-        Dictionary(grouping: meals) { calendar.startOfDay(for: $0.date) }
+        Dictionary(grouping: meals) { LogicalDay.businessDay(of: $0.date, calendar: calendar) }
             .map { day, dayMeals in
                 DayMeals(date: day, meals: dayMeals.sorted { $0.date < $1.date })
             }
             .sorted { $0.date > $1.date }
     }
 
-    /// 月度饮食汇总：记录天数去重 + 日均热量（千卡）；无记录返回 (0, 0)
+    /// 月度饮食汇总：记录业务日去重 + 日均热量（千卡）；无记录返回 (0, 0)
     static func monthlyDietSummary(
         _ meals: [Meal], calendar: Calendar = .current
     ) -> (recordedDays: Int, avgDailyKcal: Double) {
         guard !meals.isEmpty else { return (0, 0) }
-        let days = Set(meals.map { calendar.startOfDay(for: $0.date) })
+        let days = Set(meals.map { LogicalDay.businessDay(of: $0.date, calendar: calendar) })
         let total = meals.reduce(0) { $0 + $1.totalCalories }
         return (days.count, total / Double(days.count))
     }
 
-    /// 全量记录天数去重计数（入口「共 N 天」用；只看日期不看营养）
+    /// 全量记录业务日去重计数（入口「共 N 天」用；只看业务日不看营养）
     static func recordedDayCount(dates: [Date], calendar: Calendar = .current) -> Int {
-        Set(dates.map { calendar.startOfDay(for: $0) }).count
+        Set(dates.map { LogicalDay.businessDay(of: $0, calendar: calendar) }).count
     }
 
     // MARK: - 锻炼
@@ -93,7 +95,8 @@ enum HistoryGrouping {
     }
 
     /// 按日分组（倒序）；复用 HealthKitService.decodeWorkouts 解析 workoutsJSON。
-    /// 无 workout 记录的日子不产生卡片（纯快照日不属于锻炼历史）
+    /// 无 workout 记录的日子不产生卡片（纯快照日不属于锻炼历史）。
+    /// 快照按自然日聚合，分组 key 保持自然日（与存取口径一致）
     static func groupWorkoutsByDay(
         snapshots: [DailyHealthSnapshot], calendar: Calendar = .current
     ) -> [DayExercise] {

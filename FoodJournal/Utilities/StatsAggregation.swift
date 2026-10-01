@@ -15,14 +15,16 @@ enum StatsGranularity: String, CaseIterable, Identifiable {
 enum StatsAggregation {
     // MARK: - 区间
 
-    /// 统计区间：半开 [start, end) + 区间内逐日（startOfDay）列表
+    /// 统计区间：半开 [start, end) + 区间内逐业务日锚点列表。
+    /// 日粒度的 [start, end) 为业务日区间（锚点日 04:00 → 次日 04:00）；
+    /// 周/月粒度 start/end 保持自然边界（00:00），数据归属由 dailyPoints 按业务日判定。
     struct DayRange {
         let start: Date
         let end: Date
         let days: [Date]
     }
 
-    /// 统计区间：日=当天全天；周=周一至周日；月=1 日至月末
+    /// 统计区间：日=当天业务日（04:00 分界）；周=周一至周日；月=1 日至月末
     static func dateRange(
         for granularity: StatsGranularity, anchor: Date, calendar: Calendar = .current
     ) -> DayRange {
@@ -30,7 +32,12 @@ enum StatsAggregation {
         calendar.firstWeekday = 2 // 周一为一周起点
         switch granularity {
         case .day:
-            return range(from: calendar.startOfDay(for: anchor), days: 1, calendar: calendar)
+            // 业务日区间：锚点日 04:00 至次日 04:00
+            let businessDay = LogicalDay.businessDay(of: anchor, calendar: calendar)
+            let businessRange = LogicalDay.businessDayRange(of: anchor, calendar: calendar)
+            return DayRange(
+                start: businessRange.start, end: businessRange.end, days: [businessDay]
+            )
         case .week:
             let start = calendar.dateInterval(of: .weekOfYear, for: anchor)?.start
                 ?? calendar.startOfDay(for: anchor)
@@ -65,15 +72,17 @@ enum StatsAggregation {
         }
     }
 
-    /// 「›」是否可用：下一区间起点不得超过今天（今天所在区间仍可查看）
+    /// 「›」是否可用：下一区间的业务日不得超过当前业务日（今天所在区间仍可查看）
     static func canStepForward(
         from anchor: Date, granularity: StatsGranularity, calendar: Calendar = .current, now: Date = .now
     ) -> Bool {
         let next = steppedDate(anchor, granularity: granularity, delta: 1, calendar: calendar)
-        return next <= calendar.startOfDay(for: now)
+        let nextDay = LogicalDay.businessDay(of: next, calendar: calendar)
+        let todayDay = LogicalDay.businessDay(of: now, calendar: calendar)
+        return nextDay <= todayDay
     }
 
-    /// 导航行区间文字：日「10月1日 周三」；周「9月28日–10月4日」；月「2026年10月」
+    /// 导航行区间文字：日「10月1日 周三」（业务日锚点）；周「9月28日–10月4日」；月「2026年10月」
     static func rangeDisplayText(
         for granularity: StatsGranularity, anchor: Date, calendar: Calendar = .current
     ) -> String {
@@ -81,7 +90,10 @@ enum StatsAggregation {
         calendar.firstWeekday = 2
         switch granularity {
         case .day:
-            return formatted(anchor, format: "M月d日 EEE", calendar: calendar)
+            return formatted(
+                LogicalDay.businessDay(of: anchor, calendar: calendar),
+                format: "M月d日 EEE", calendar: calendar
+            )
         case .week:
             let range = dateRange(for: .week, anchor: anchor, calendar: calendar)
             let end = calendar.date(byAdding: .day, value: 6, to: range.start) ?? range.start
@@ -113,12 +125,15 @@ enum StatsAggregation {
         let remSleepMin: Double?
     }
 
-    /// 逐日摄入/消耗/睡眠，与 days 一一对应（缺失日补零/nil，x 轴连续不跳日期）
+    /// 逐日摄入/消耗/睡眠，与 days 一一对应（缺失日补零/nil，x 轴连续不跳日期）。
+    /// 餐按业务日归属（凌晨 04:00 前算前一业务日）；快照按自然日 key 匹配
     static func dailyPoints(
         meals: [Meal], snapshots: [DailyHealthSnapshot], days: [Date], calendar: Calendar = .current
     ) -> [DailyPoint] {
         days.map { day in
-            let dayMeals = meals.filter { calendar.isDate($0.date, inSameDayAs: day) }
+            let dayMeals = meals.filter {
+                LogicalDay.businessDay(of: $0.date, calendar: calendar) == day
+            }
             let intake = dayMeals.reduce(0) { $0 + $1.totalCalories }
             let snapshot = snapshots.first { calendar.isDate($0.date, inSameDayAs: day) }
             return DailyPoint(

@@ -42,21 +42,23 @@ struct ExerciseView: View {
 
     init(selectedTab: Binding<AppTab>) {
         _selectedTab = selectedTab
-        // 今日范围（含边界当天全天），与 HomeView 今日口径一致
         let calendar = Calendar.current
-        let start = calendar.startOfDay(for: .now)
-        let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start
+        // 今日快照：快照按自然日 key 存取，凌晨窗口（00:00–04:00）取前一自然日（方案 A），
+        // 与 HomeView 缺口卡消耗口径一致
+        let burnDayStart = LogicalDay.burnSnapshotDay(for: .now, calendar: calendar)
+        let end = calendar.date(byAdding: .day, value: 1, to: burnDayStart) ?? burnDayStart
         _todaySnapshots = Query(
             filter: #Predicate<DailyHealthSnapshot> { snapshot in
-                snapshot.date >= start && snapshot.date < end
+                snapshot.date >= burnDayStart && snapshot.date < end
             },
             sort: [SortDescriptor(\.date, order: .reverse)]
         )
-        // 昨日范围（身体电量较昨日趋势对比用）
-        let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: start) ?? start
+        // 昨日范围（身体电量较昨日趋势对比用）：今日快照日的前一自然日
+        let yesterdayStart = LogicalDay.previousCalendarDay(of: burnDayStart, calendar: calendar)
+        let yesterdayEnd = burnDayStart
         _yesterdaySnapshots = Query(
             filter: #Predicate<DailyHealthSnapshot> { snapshot in
-                snapshot.date >= yesterdayStart && snapshot.date < start
+                snapshot.date >= yesterdayStart && snapshot.date < yesterdayEnd
             },
             sort: [SortDescriptor(\.date, order: .reverse)]
         )
@@ -385,8 +387,9 @@ struct ExerciseView: View {
     }
 
     private func loadCachedAdvice() {
+        // 建议归属业务日（凌晨 04:00 前算前一业务日）
         cachedAdvice = try? AdviceRepository(context: modelContext)
-            .advice(for: .now, channel: DailyAdvice.Channel.exercise)
+            .advice(for: LogicalDay.businessDay(of: .now), channel: DailyAdvice.Channel.exercise)
     }
 
     private func generateAdvice() {
@@ -398,13 +401,14 @@ struct ExerciseView: View {
         errorMessage = nil
         isGenerating = true
         let context = modelContext
+        let adviceDay = LogicalDay.businessDay(of: .now)
         generationTask = Task {
             do {
                 let content = try await AdviceService()
-                    .generateAdvice(date: .now, context: context, config: config, apiKey: apiKey)
+                    .generateAdvice(date: adviceDay, context: context, config: config, apiKey: apiKey)
                 guard !Task.isCancelled else { return }
                 let saved = try AdviceRepository(context: context).upsert(
-                    date: .now,
+                    date: adviceDay,
                     channel: DailyAdvice.Channel.exercise,
                     content: content,
                     modelTag: config.modelID

@@ -10,7 +10,7 @@ struct DietHistoryView: View {
     /// 当月经区间查询的餐记录（月份切换/返回页面时重取）
     @State private var monthMeals: [Meal] = []
     @State private var showDatePicker = false
-    /// 展开的日（startOfDay）；默认展开最近一天
+    /// 展开的业务日锚点（04:00 分界）；默认展开最近一天
     @State private var expandedDay: Date?
     /// 展开菜品明细的餐
     @State private var expandedMealIDs: Set<UUID> = []

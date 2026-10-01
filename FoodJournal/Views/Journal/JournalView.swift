@@ -170,14 +170,16 @@ struct JournalView: View {
         }
     }
 
-    /// upsert 当日小记（一天一篇）；无内容且无既有记录时跳过
+    /// upsert 当日小记（一个业务日一篇）；无内容且无既有记录时跳过。
+    /// 当日 = 当前业务日（凌晨 04:00 前写的小记归属前一业务日）
     private func saveJournal() {
         autosaveTask?.cancel()
         let text = journalText
         guard text != lastSavedText else { return }
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && lastSavedText.isEmpty { return }
         do {
-            _ = try JournalRepository(context: modelContext).save(text: text, for: .now)
+            _ = try JournalRepository(context: modelContext)
+                .save(text: text, for: LogicalDay.businessDay(of: .now))
             lastSavedText = text
             savedAt = .now
         } catch {
@@ -186,7 +188,8 @@ struct JournalView: View {
     }
 
     private func loadToday() {
-        if let journal = try? JournalRepository(context: modelContext).journal(for: .now) {
+        if let journal = try? JournalRepository(context: modelContext)
+            .journal(for: LogicalDay.businessDay(of: .now)) {
             journalText = journal.text
             lastSavedText = journal.text
         } else {
@@ -291,8 +294,9 @@ struct JournalView: View {
     }
 
     private func loadCachedAdvice() {
+        // 建议归属业务日（凌晨 04:00 前算前一业务日）
         cachedAdvice = try? AdviceRepository(context: modelContext)
-            .advice(for: .now, channel: DailyAdvice.Channel.journal)
+            .advice(for: LogicalDay.businessDay(of: .now), channel: DailyAdvice.Channel.journal)
     }
 
     private func generateAdvice() {
@@ -305,10 +309,11 @@ struct JournalView: View {
         isGenerating = true
         let context = modelContext
         let text = journalText
+        let adviceDay = LogicalDay.businessDay(of: .now)
         generationTask = Task {
             do {
                 let content = try await AdviceService().generateAdvice(
-                    date: .now,
+                    date: adviceDay,
                     context: context,
                     config: config,
                     apiKey: apiKey,
@@ -317,7 +322,7 @@ struct JournalView: View {
                 )
                 guard !Task.isCancelled else { return }
                 let saved = try AdviceRepository(context: context).upsert(
-                    date: .now,
+                    date: adviceDay,
                     channel: DailyAdvice.Channel.journal,
                     content: content,
                     modelTag: config.modelID
@@ -393,20 +398,23 @@ struct JournalView: View {
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
     }
 
-    /// 近 30 天 journal 渠道建议按日去重（每天取最新一条），倒序；当天已在顶部展示，不重复
+    /// 近 30 天 journal 渠道建议按业务日去重（每个业务日取最新一条），倒序；
+    /// 当前业务日已在顶部展示，不重复
     private func loadHistory() {
-        guard let from = Calendar.current.date(byAdding: .day, value: -30, to: .now) else { return }
+        let calendar = Calendar.current
+        guard let from = calendar.date(byAdding: .day, value: -30, to: .now) else { return }
         let all = (try? AdviceRepository(context: modelContext).fetch(from: from, to: .now)) ?? []
+        let todayBusinessDay = LogicalDay.businessDay(of: .now)
         var seenDays: Set<Date> = []
         var latestPerDay: [DailyAdvice] = []
         for advice in all.sorted(by: { $0.generatedAt > $1.generatedAt })
         where advice.channel == DailyAdvice.Channel.journal {
-            let day = Calendar.current.startOfDay(for: advice.date)
+            let day = LogicalDay.businessDay(of: advice.date)
             if seenDays.insert(day).inserted {
                 latestPerDay.append(advice)
             }
         }
-        historyAdvice = latestPerDay.filter { !Calendar.current.isDateInToday($0.date) }
+        historyAdvice = latestPerDay.filter { LogicalDay.businessDay(of: $0.date) != todayBusinessDay }
     }
 
     /// 日期 →「MM月dd日」（固定 locale，结果稳定）
