@@ -46,6 +46,8 @@ struct SettingsView: View {
 
 private struct GoalSection: View {
     @AppStorage(CalorieGap.goalStorageKey) private var goalKcal: Double = CalorieGap.defaultGoalKcal
+    @AppStorage(NutritionTargetSettings.proteinFactorKey) private var proteinFactor: Double = NutritionTargetSettings.defaultProteinFactor
+    @AppStorage(NutritionTargetSettings.fatRatioKey) private var fatRatio: Double = NutritionTargetSettings.defaultFatRatio
 
     var body: some View {
         Section {
@@ -58,10 +60,30 @@ private struct GoalSection: View {
                         .monospacedDigit()
                 }
             }
+
+            Stepper(value: $proteinFactor, in: 1.2...2.5, step: 0.1) {
+                HStack {
+                    Text("蛋白系数")
+                    Spacer()
+                    Text(String(format: "%.1f g/kg", proteinFactor))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+
+            Stepper(value: $fatRatio, in: 0.20...0.35, step: 0.05) {
+                HStack {
+                    Text("脂肪供能比")
+                    Spacer()
+                    Text("\(Int((fatRatio * 100).rounded()))%")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
         } header: {
             Text("目标")
         } footer: {
-            Text("每天希望「消耗 − 摄入」达到的热量差，用于管住嘴页的热量缺口卡。")
+            Text("每天希望「消耗 − 摄入」达到的热量差，用于管住嘴页的热量缺口卡。蛋白系数与脂肪供能比用于今日汇总卡的每日营养素目标：热量取近 7 日均消耗减缺口，蛋白按体重×系数，脂肪按供能比折算，碳水由剩余热量自动算出。")
                 .font(.footnote)
         }
     }
