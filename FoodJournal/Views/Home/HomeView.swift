@@ -15,12 +15,18 @@ struct HomeView: View {
     /// 近三天（含今天）餐与快照：趋势表卡用
     @Query private var recentMeals: [Meal]
     @Query private var recentSnapshots: [DailyHealthSnapshot]
+    /// 近 8 个自然日快照：营养目标的「近 7 个业务日均消耗」用
+    @Query private var weekSnapshots: [DailyHealthSnapshot]
 
     /// 跳转饮食历史页
     @State private var showDietHistory = false
 
     /// 每日热量缺口目标（千卡），我的-目标 中设置
     @AppStorage(CalorieGap.goalStorageKey) private var gapGoalKcal: Double = CalorieGap.defaultGoalKcal
+
+    /// 蛋白系数（g/kg）与脂肪供能比，我的-目标 中设置
+    @AppStorage(NutritionTargetSettings.proteinFactorKey) private var proteinFactor: Double = NutritionTargetSettings.defaultProteinFactor
+    @AppStorage(NutritionTargetSettings.fatRatioKey) private var fatRatio: Double = NutritionTargetSettings.defaultFatRatio
 
     // MARK: - 备份提醒
 
@@ -136,6 +142,15 @@ struct HomeView: View {
         _recentSnapshots = Query(
             filter: #Predicate<DailyHealthSnapshot> { snapshot in
                 snapshot.date >= threeDayStart && snapshot.date < end
+            },
+            sort: [SortDescriptor(\.date, order: .reverse)]
+        )
+        // 近 8 个自然日快照（覆盖营养目标的近 7 个业务日，含凌晨窗口余量）
+        let weekAnchor = calendar.date(byAdding: .day, value: -7, to: todayAnchor) ?? todayAnchor
+        let weekStart = calendar.startOfDay(for: weekAnchor)
+        _weekSnapshots = Query(
+            filter: #Predicate<DailyHealthSnapshot> { snapshot in
+                snapshot.date >= weekStart && snapshot.date < end
             },
             sort: [SortDescriptor(\.date, order: .reverse)]
         )
@@ -333,9 +348,15 @@ struct HomeView: View {
             }
 
             Section {
-                SummaryBar(meals: todayMeals)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
+                SummaryBar(
+                    meals: todayMeals,
+                    targets: nutritionTargets,
+                    basisWeightKg: latestWeightKg,
+                    basisAvgBurnKcal: avgBurn7d,
+                    deficitGoalKcal: gapGoalKcal
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
             }
 
             Section {
@@ -387,6 +408,32 @@ struct HomeView: View {
                 .listRowBackground(Color.clear)
             }
         }
+    }
+
+    // MARK: - 每日营养素目标
+
+    /// 最新一次体重记录（kg）
+    private var latestWeightKg: Double? {
+        weightRecords.max { $0.date < $1.date }?.weightKg
+    }
+
+    /// 近 7 个业务日均总消耗（activeKcal + restingKcal）
+    private var avgBurn7d: Double? {
+        averageBurn(
+            snapshots: weekSnapshots,
+            anchorDay: LogicalDay.businessDay(of: .now)
+        )
+    }
+
+    /// 今日汇总卡的每日营养素目标（各项缺失独立处理）
+    private var nutritionTargets: NutritionTargets {
+        makeTargets(
+            latestWeightKg: latestWeightKg,
+            avgBurn7d: avgBurn7d,
+            deficitTarget: gapGoalKcal,
+            proteinFactor: proteinFactor,
+            fatRatio: fatRatio
+        )
     }
 
     // MARK: - 识别中遮罩
@@ -579,11 +626,20 @@ private struct BackupBanner: View {
 
 private struct SummaryBar: View {
     let meals: [Meal]
+    /// 每日营养素目标（nil = 依据缺失，显示「—」）
+    let targets: NutritionTargets
+    /// 目标依据：最新体重 / 近 7 业务日均消耗 / 缺口目标
+    let basisWeightKg: Double?
+    let basisAvgBurnKcal: Double?
+    let deficitGoalKcal: Double
 
     private var totalCalories: Double { meals.reduce(0) { $0 + $1.totalCalories } }
     private var totalProtein: Double { meals.reduce(0) { $0 + $1.totalProtein } }
     private var totalCarbs: Double { meals.reduce(0) { $0 + $1.totalCarbs } }
     private var totalFat: Double { meals.reduce(0) { $0 + $1.totalFat } }
+
+    /// 是否有任一目标依据（体重或快照），决定底部显示依据行还是缺失提示
+    private var hasAnyBasis: Bool { basisWeightKg != nil || basisAvgBurnKcal != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -591,11 +647,25 @@ private struct SummaryBar: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             HStack(spacing: 0) {
-                summaryItem(value: "\(Int(totalCalories))", unit: "千卡", label: "总热量")
-                summaryItem(value: String(format: "%.1f", totalProtein), unit: "g", label: "蛋白")
-                summaryItem(value: String(format: "%.1f", totalCarbs), unit: "g", label: "碳水")
-                summaryItem(value: String(format: "%.1f", totalFat), unit: "g", label: "脂肪")
+                summaryItem(
+                    value: "\(Int(totalCalories))", unit: "千卡", label: "总热量",
+                    target: targets.calories, isOver: isOverTarget(today: totalCalories, target: targets.calories),
+                    comma: true
+                )
+                summaryItem(
+                    value: String(format: "%.1f", totalProtein), unit: "g", label: "蛋白",
+                    target: targets.proteinG, isOver: isOverTarget(today: totalProtein, target: targets.proteinG)
+                )
+                summaryItem(
+                    value: String(format: "%.1f", totalCarbs), unit: "g", label: "碳水",
+                    target: targets.carbsG, isOver: isOverTarget(today: totalCarbs, target: targets.carbsG)
+                )
+                summaryItem(
+                    value: String(format: "%.1f", totalFat), unit: "g", label: "脂肪",
+                    target: targets.fatG, isOver: isOverTarget(today: totalFat, target: targets.fatG)
+                )
             }
+            footerLine
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
@@ -603,21 +673,63 @@ private struct SummaryBar: View {
         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func summaryItem(value: String, unit: String, label: String) -> some View {
+    /// 底部：有依据 → 依据行；体重与快照都缺 → 缺失提示
+    @ViewBuilder
+    private var footerLine: some View {
+        if hasAnyBasis {
+            Text(basisText)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        } else {
+            Text("记录体重并同步健康数据后可显示每日目标")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    /// 「目标依据：体重 104 kg · 近7日均消耗 2,400 千卡 · 缺口 300」（缺失项略去）
+    private var basisText: String {
+        var parts: [String] = []
+        if let weight = basisWeightKg {
+            parts.append("体重 \(String(format: "%g", weight)) kg")
+        }
+        if let burn = basisAvgBurnKcal {
+            parts.append("近7日均消耗 \(StatsAggregation.kcalText(burn)) 千卡")
+        }
+        parts.append("缺口 \(Int(deficitGoalKcal))")
+        return "目标依据：" + parts.joined(separator: " · ")
+    }
+
+    /// 三行式列：今日值+单位 → /目标（缺失「—」）→ 营养素名；超额今日值标红
+    private func summaryItem(
+        value: String, unit: String, label: String, target: Double?, isOver: Bool, comma: Bool = false
+    ) -> some View {
         VStack(spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 2) {
                 Text(value)
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
+                    .foregroundStyle(isOver ? Color.red : Color.primary)
                 Text(unit)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Text(targetText(target, comma: comma))
+                .font(.subheadline)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// 第二行目标文字：千卡带千分位，其余整数
+    private func targetText(_ target: Double?, comma: Bool) -> String {
+        guard let target else { return "—" }
+        let number = comma ? StatsAggregation.kcalText(target) : "\(Int(target.rounded()))"
+        return "/\(number)"
     }
 }
 
