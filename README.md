@@ -107,6 +107,21 @@ xcrun devicectl device process launch --device <UDID> com.somethingwierd.FoodJou
 
 ---
 
+## 仓库位置与自动推送
+
+- 本仓库放在 **`~/Developer/FoodJournal`**，刻意不放 `~/Documents`：该目录受 macOS TCC 保护，launchd 后台任务读不到，自动推送会以退出码 126 静默失败（错误会写进 `~/Library/Logs/foodjournal-autopush.err.log`）。
+- `~/Documents/All_the_codes/vibeEverything/something_wierd/FoodJournal` 保留了一个**指向新位置的软链接**，历史引用不会失效；但正式路径请以新位置为准。
+- `tools/autopush.sh` 由 launchd 每 10 分钟执行一次，只推送「已提交但未推送」的内容；`AUTO_COMMIT` 默认关闭（避免把其他会话的半成品自动提交）。日志：`~/Library/Logs/foodjournal-autopush.log`。
+
+```bash
+./tools/autopush.sh status      # 查看状态与待推送数
+./tools/autopush.sh test        # 立即触发一次
+./tools/autopush.sh install     # 重装/更新 launchd 任务（换了路径后需要跑一次）
+./tools/autopush.sh uninstall   # 卸载
+```
+
+---
+
 ## 测试
 
 ```bash
