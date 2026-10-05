@@ -14,7 +14,7 @@
 #   QUIET_MIN=15   静默判定分钟数
 set -u
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/.." && pwd -P)"   # pwd -P：解析软链接，保证 launchd 用的是物理真实路径
 BRANCH=main
 REMOTE=origin
 LOG="$HOME/Library/Logs/foodjournal-autopush.log"
