@@ -91,7 +91,7 @@ install_agent() {
 PLISTEOF
   launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null
   if out="$(launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>&1)"; then
-    echo "已安装并加载：$PLIST（每 10 分钟一次，AUTO_COMMIT=$AUTO_COMMIT）"
+    echo "已安装并加载：${PLIST}（每 10 分钟一次，AUTO_COMMIT=${AUTO_COMMIT}）"
     log "安装 launchd 任务，AUTO_COMMIT=$AUTO_COMMIT"
   else
     echo "加载失败：$out"
@@ -105,7 +105,7 @@ PLISTEOF
 uninstall_agent() {
   launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null
   rm -f "$PLIST"
-  echo "已卸载（日志保留在 $LOG）"
+  echo "已卸载（日志保留在 ${LOG}）"
 }
 
 status_agent() {
