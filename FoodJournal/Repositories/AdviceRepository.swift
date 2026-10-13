@@ -12,8 +12,14 @@ protocol AdviceRepositoryProtocol {
     func upsert(date: Date, channel: String, content: String, modelTag: String) throws -> DailyAdvice
     /// 保存建议（追加，同一天可多条历史）
     func save(_ advice: DailyAdvice) throws
-    /// 按日期范围查询
+    /// 按**自然日**区间查询
+    /// - Warning: 自然日口径；业务日（04:00 分界）场景请改用 `fetch(businessDaysFrom:to:)`
+    @available(*, deprecated, message: "自然日口径；业务日场景请用 fetch(businessDaysFrom:to:)")
     func fetch(from: Date, to: Date) throws -> [DailyAdvice]
+    /// 按**业务日**口径区间查询：`startAnchor` / `endAnchor` 为业务日**锚点**（该业务日日历日 00:00），
+    /// 返回归属业务日 ∈ [startAnchor, endAnchor) 的建议（半开区间）。
+    /// 实际取数区间为 [startAnchor 04:00, endAnchor 04:00)。
+    func fetch(businessDaysFrom startAnchor: Date, to endAnchor: Date) throws -> [DailyAdvice]
     func delete(_ advice: DailyAdvice) throws
 }
 
@@ -78,12 +84,27 @@ final class AdviceRepository: AdviceRepositoryProtocol {
         try context.save()
     }
 
+    @available(*, deprecated, message: "自然日口径；业务日场景请用 fetch(businessDaysFrom:to:)")
     func fetch(from startDate: Date, to endDate: Date) throws -> [DailyAdvice] {
         let calendar = Calendar.current
         let start = calendar.startOfDay(for: startDate)
         guard let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate)) else {
             return []
         }
+        let predicate = #Predicate<DailyAdvice> { advice in
+            advice.date >= start && advice.date < end
+        }
+        let descriptor = FetchDescriptor<DailyAdvice>(predicate: predicate, sortBy: [SortDescriptor(\.date)])
+        return try context.fetch(descriptor)
+    }
+
+    /// 业务日口径区间查询：入参为**业务日锚点**（00:00），
+    /// 经 `LogicalDay.businessDayRange(forAnchor:)` 换算为 [锚点日 04:00, 次日 04:00)，
+    /// 不可再走 `businessDayRange(of:)`（锚点 hour < 4 会被二次减一天）。
+    func fetch(businessDaysFrom startAnchor: Date, to endAnchor: Date) throws -> [DailyAdvice] {
+        let calendar = Calendar.current
+        let start = LogicalDay.businessDayRange(forAnchor: startAnchor, calendar: calendar).start
+        let end = LogicalDay.businessDayRange(forAnchor: endAnchor, calendar: calendar).start
         let predicate = #Predicate<DailyAdvice> { advice in
             advice.date >= start && advice.date < end
         }

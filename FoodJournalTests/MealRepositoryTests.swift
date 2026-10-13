@@ -99,3 +99,110 @@ final class MealRepositoryTests: XCTestCase {
         XCTAssertEqual(all.map(\.name), ["豆浆油条", "食堂", "火锅"]) // 按时间升序
     }
 }
+
+/// 业务日（04:00 分界）仓储层口径：区间取数不漏不多、小记按业务日锚点读写一致
+@MainActor
+final class BusinessDayRepositoryTests: XCTestCase {
+    private var container: ModelContainer!
+    private var context: ModelContext!
+
+    override func setUp() {
+        container = try! TestSupport.makeContainer()
+        context = ModelContext(container)
+    }
+
+    override func tearDown() {
+        container = nil
+        context = nil
+    }
+
+    /// 指定日的业务日锚点（该日历日 00:00）
+    private func anchor(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        Calendar.current.startOfDay(for: TestSupport.date(y: month, d: day, hour: 12))
+    }
+
+    // MARK: - 餐：04:00 前归前一业务日
+
+    func testMealBefore0400BelongsToPreviousBusinessDay() throws {
+        let mealRepository = MealRepository(context: context)
+        // 10/2 01:00 的餐 → 归属 10/1 业务日
+        let lateNight = Meal(
+            date: TestSupport.date(y: 10, d: 2, hour: 1), mealType: .dinner, name: "夜宵"
+        )
+        try mealRepository.insert(lateNight)
+        XCTAssertEqual(LogicalDay.businessDay(of: lateNight.date), anchor(2026, 10, 1))
+
+        // 10/1 业务日窗口取得到，10/2 业务日窗口取不到
+        let day1 = try mealRepository.fetch(businessDaysFrom: anchor(2026, 10, 1), to: anchor(2026, 10, 2))
+        XCTAssertEqual(Set(day1.map(\.id)), [lateNight.id])
+        let day2 = try mealRepository.fetch(businessDaysFrom: anchor(2026, 10, 2), to: anchor(2026, 10, 3))
+        XCTAssertTrue(day2.isEmpty)
+    }
+
+    // MARK: - 边界 03:59 / 04:00：不漏不多
+
+    func testBusinessDayRangeBoundaryExact() throws {
+        let mealRepository = MealRepository(context: context)
+        // 10/2 03:59 → 10/1 业务日；10/2 04:00 → 10/2 业务日
+        let justBefore = Meal(
+            date: TestSupport.date(y: 10, d: 2, hour: 3, minute: 59), mealType: .dinner, name: "凌晨"
+        )
+        let exactlyAt = Meal(
+            date: TestSupport.date(y: 10, d: 2, hour: 4, minute: 0), mealType: .breakfast, name: "早餐"
+        )
+        try mealRepository.insert(justBefore)
+        try mealRepository.insert(exactlyAt)
+
+        let day1 = try mealRepository.fetch(businessDaysFrom: anchor(2026, 10, 1), to: anchor(2026, 10, 2))
+        XCTAssertEqual(Set(day1.map(\.id)), [justBefore.id], "03:59 应归前一业务日")
+
+        let day2 = try mealRepository.fetch(businessDaysFrom: anchor(2026, 10, 2), to: anchor(2026, 10, 3))
+        XCTAssertEqual(Set(day2.map(\.id)), [exactlyAt.id], "04:00 应归当天业务日")
+
+        // 跨两天的窗口恰好两条（不漏不多）
+        let both = try mealRepository.fetch(businessDaysFrom: anchor(2026, 10, 1), to: anchor(2026, 10, 3))
+        XCTAssertEqual(Set(both.map(\.id)), [justBefore.id, exactlyAt.id])
+    }
+
+    func testMonthBusinessDayWindowExcludesCrossMonthLateNight() throws {
+        let mealRepository = MealRepository(context: context)
+        // 10/1 01:00 → 9/30 业务日（属 9 月）；10/1 12:00 → 10/1 业务日（属 10 月）
+        let crossMonthLateNight = Meal(
+            date: TestSupport.date(y: 10, d: 1, hour: 1), mealType: .dinner, name: "跨月夜宵"
+        )
+        let lunch = Meal(
+            date: TestSupport.date(y: 10, d: 1, hour: 12), mealType: .lunch, name: "午餐"
+        )
+        try mealRepository.insert(crossMonthLateNight)
+        try mealRepository.insert(lunch)
+
+        // 月窗口用业务日锚点表示：9 月 = [9/1, 10/1)；10 月 = [10/1, 11/1)
+        let september = try mealRepository.fetch(businessDaysFrom: anchor(2026, 9, 1), to: anchor(2026, 10, 1))
+        XCTAssertEqual(Set(september.map(\.id)), [crossMonthLateNight.id], "跨月凌晨餐应归 9 月")
+        let october = try mealRepository.fetch(businessDaysFrom: anchor(2026, 10, 1), to: anchor(2026, 11, 1))
+        XCTAssertEqual(Set(october.map(\.id)), [lunch.id], "10 月不应带上 9/30 业务日的餐")
+    }
+
+    // MARK: - 小记：跨 04:00 读写一致
+
+    func testJournalReadWriteAcross0400IsConsistent() throws {
+        let journalRepository = JournalRepository(context: context)
+        // 10/2 01:00 与 10/2 03:30 同属 10/1 业务日 → 同一条，后者覆盖
+        _ = try journalRepository.save(text: "凌晨写的一篇", for: TestSupport.date(y: 10, d: 2, hour: 1))
+        _ = try journalRepository.save(text: "同业务日更新", for: TestSupport.date(y: 10, d: 2, hour: 3, minute: 30))
+
+        XCTAssertEqual(try journalRepository.journal(forBusinessDay: anchor(2026, 10, 1))?.text, "同业务日更新")
+        XCTAssertEqual(try journalRepository.journal(for: TestSupport.date(y: 10, d: 2, hour: 2))?.text, "同业务日更新")
+        XCTAssertNil(try journalRepository.journal(forBusinessDay: anchor(2026, 10, 2)))
+
+        let stored = try context.fetch(FetchDescriptor<DailyJournal>())
+        XCTAssertEqual(stored.count, 1, "同一业务日只应有一条小记")
+        XCTAssertEqual(stored.first?.date, anchor(2026, 10, 1), "落库 date 应为业务日锚点")
+
+        // 04:00 之后写 → 新业务日，独立一条
+        _ = try journalRepository.save(text: "10/2 白天", for: TestSupport.date(y: 10, d: 2, hour: 5))
+        XCTAssertEqual(try journalRepository.journal(forBusinessDay: anchor(2026, 10, 1))?.text, "同业务日更新")
+        XCTAssertEqual(try journalRepository.journal(forBusinessDay: anchor(2026, 10, 2))?.text, "10/2 白天")
+        XCTAssertEqual(try context.fetch(FetchDescriptor<DailyJournal>()).count, 2)
+    }
+}

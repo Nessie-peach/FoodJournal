@@ -179,7 +179,7 @@ struct JournalView: View {
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && lastSavedText.isEmpty { return }
         do {
             _ = try JournalRepository(context: modelContext)
-                .save(text: text, for: LogicalDay.businessDay(of: .now))
+                .save(text: text, forBusinessDay: LogicalDay.businessDay(of: .now))
             lastSavedText = text
             savedAt = .now
         } catch {
@@ -189,7 +189,7 @@ struct JournalView: View {
 
     private func loadToday() {
         if let journal = try? JournalRepository(context: modelContext)
-            .journal(for: LogicalDay.businessDay(of: .now)) {
+            .journal(forBusinessDay: LogicalDay.businessDay(of: .now)) {
             journalText = journal.text
             lastSavedText = journal.text
         } else {
@@ -398,23 +398,27 @@ struct JournalView: View {
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
     }
 
-    /// 近 30 天 journal 渠道建议按业务日去重（每个业务日取最新一条），倒序；
-    /// 当前业务日已在顶部展示，不重复
+    /// 近 30 个业务日的 journal 渠道建议按业务日去重（每个业务日取最新一条），倒序；
+    /// 取数窗口按业务日锚点换算（[锚点日 04:00, 次日 04:00) 半开），当前业务日已在顶部展示，不重复
     private func loadHistory() {
         let calendar = Calendar.current
-        guard let from = calendar.date(byAdding: .day, value: -30, to: .now) else { return }
-        let all = (try? AdviceRepository(context: modelContext).fetch(from: from, to: .now)) ?? []
         let todayBusinessDay = LogicalDay.businessDay(of: .now)
+        guard let fromAnchor = calendar.date(byAdding: .day, value: -30, to: todayBusinessDay),
+              let endAnchor = calendar.date(byAdding: .day, value: 1, to: todayBusinessDay) else { return }
+        let all = (try? AdviceRepository(context: modelContext)
+            .fetch(businessDaysFrom: fromAnchor, to: endAnchor)) ?? []
         var seenDays: Set<Date> = []
         var latestPerDay: [DailyAdvice] = []
         for advice in all.sorted(by: { $0.generatedAt > $1.generatedAt })
         where advice.channel == DailyAdvice.Channel.journal {
-            let day = LogicalDay.businessDay(of: advice.date)
+            // 建议按业务日锚点（00:00）落库，直接取其日历日即业务日，不可再过 businessDay(of:)
+            //（锚点 hour < 4 会被二次减一天）
+            let day = calendar.startOfDay(for: advice.date)
             if seenDays.insert(day).inserted {
                 latestPerDay.append(advice)
             }
         }
-        historyAdvice = latestPerDay.filter { LogicalDay.businessDay(of: $0.date) != todayBusinessDay }
+        historyAdvice = latestPerDay.filter { calendar.startOfDay(for: $0.date) != todayBusinessDay }
     }
 
     /// 日期 →「MM月dd日」（固定 locale，结果稳定）

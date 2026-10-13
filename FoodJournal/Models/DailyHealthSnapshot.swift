@@ -16,6 +16,16 @@ struct WorkoutRecord: Codable, Equatable, Hashable {
     var startDate: Date
 }
 
+/// HRV 度量口径来源标注（写入 `DailyHealthSnapshot.hrvSource`）。
+/// Apple「心率变异性」（HealthKit heartRateVariabilitySDNN）是 SDNN；
+/// 佳明 HRV Status 基于 RMSSD——两者不是同一度量，故落库时标注口径，展示时显式区分。
+enum HRVSource: String {
+    /// Apple HealthKit `heartRateVariabilitySDNN`（SDNN）
+    case appleSDNN = "apple-sdnn"
+    /// 佳明 HRV Status（基于 RMSSD）
+    case garmin = "garmin-hrv"
+}
+
 /// 每日健康快照（来自 Apple Watch / 健康同步）
 @Model
 final class DailyHealthSnapshot {
@@ -35,6 +45,9 @@ final class DailyHealthSnapshot {
     var avgHR: Double
     /// 心率变异性（ms，可能缺失）
     var hrvMS: Double?
+    /// HRV 度量口径来源标注（"apple-sdnn" / "garmin-hrv"，nil = 未知）。
+    /// Apple 的 HRV 是 SDNN，佳明 HRV Status 基于 RMSSD，两者口径不同，不能直接混用展示。
+    var hrvSource: String?
     /// 当日运动记录 JSON（[WorkoutRecord]），空为无数据
     var workoutsJSON: String?
     /// 最近一次同步时间
@@ -71,6 +84,7 @@ final class DailyHealthSnapshot {
         sleepEnd: Date? = nil,
         avgHR: Double,
         hrvMS: Double? = nil,
+        hrvSource: String? = nil,
         workoutsJSON: String? = nil,
         syncedAt: Date = .now
     ) {
@@ -83,6 +97,7 @@ final class DailyHealthSnapshot {
         self.sleepEnd = sleepEnd
         self.avgHR = avgHR
         self.hrvMS = hrvMS
+        self.hrvSource = hrvSource
         self.workoutsJSON = workoutsJSON
         self.syncedAt = syncedAt
     }

@@ -30,7 +30,7 @@ enum JournalCatchup {
         do {
             let adviceRepository = AdviceRepository(context: context)
             let hasAdvice = try adviceRepository.advice(for: yesterday, channel: DailyAdvice.Channel.journal) != nil
-            let journal = try JournalRepository(context: context).journal(for: yesterday)
+            let journal = try JournalRepository(context: context).journal(forBusinessDay: yesterday)
             let mealCount = try mealCount(on: yesterday, in: context)
             guard shouldGenerate(
                 yesterdayAdviceExists: hasAdvice,

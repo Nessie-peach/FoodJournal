@@ -69,11 +69,11 @@ struct DietHistoryView: View {
 
     // MARK: - 数据
 
-    /// 按当月日期区间 fetch（复用仓库的 [start, end) 口径）
+    /// 按当月**业务日**区间 fetch：当月首个业务日锚点 → 次月首个业务日锚点（半开），
+    /// 即实际取数区间 [当月 1 日 04:00, 次月 1 日 04:00)
     private func reload() {
         let repository = MealRepository(context: modelContext)
-        let lastMoment = range.end.addingTimeInterval(-1)
-        monthMeals = (try? repository.fetch(from: range.start, to: lastMoment)) ?? []
+        monthMeals = (try? repository.fetch(businessDaysFrom: range.start, to: range.end)) ?? []
         if expandedDay == nil, let latest = dayGroups.first?.date {
             expandedDay = latest
         }
