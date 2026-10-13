@@ -188,6 +188,7 @@ final class HealthKitService {
                     sleepEnd: sleep.latestEnd,
                     avgHR: avgHR ?? 0,
                     hrvMS: hrvMS,
+                    hrvSource: hrvMS != nil ? HRVSource.appleSDNN.rawValue : nil,
                     workoutsJSON: workoutsJSON,
                     syncedAt: syncedAt
                 )

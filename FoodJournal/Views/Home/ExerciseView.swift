@@ -451,7 +451,8 @@ enum ExerciseCardLogic {
         let footnote: String?
     }
 
-    /// HRV 卡数据源选择：Garmin lastNightAvg 优先（标「佳明」+ 基线状态）→ HealthKit hrvMS 回落 → 未同步
+    /// HRV 卡数据源选择：Garmin lastNightAvg 优先（标「佳明」+ 基线状态）→ HealthKit hrvMS 回落 → 未同步。
+    /// 取值算法与优先级保持不变，仅在回落 HealthKit 时按 `hrvSource` 补口径标注（SDNN）。
     static func hrvCard(from snapshot: DailyHealthSnapshot?) -> HRVCard {
         guard let snapshot else { return HRVCard(value: "—", unit: nil, footnote: "未同步") }
         if let garmin = snapshot.hrvLastNightAvg {
@@ -463,7 +464,10 @@ enum ExerciseCardLogic {
             return HRVCard(value: String(Int(garmin.rounded())), unit: "ms", footnote: footnote)
         }
         if let hk = snapshot.hrvMS {
-            return HRVCard(value: String(Int(hk.rounded())), unit: "ms", footnote: nil)
+            return HRVCard(
+                value: String(Int(hk.rounded())), unit: "ms",
+                footnote: HealthCardFormat.hrvSourceLabel(snapshot.hrvSource)
+            )
         }
         return HRVCard(value: "—", unit: nil, footnote: "未同步")
     }
