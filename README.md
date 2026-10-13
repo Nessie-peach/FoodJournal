@@ -107,6 +107,23 @@ xcrun devicectl device process launch --device <UDID> com.somethingwierd.FoodJou
 
 ---
 
+## 公开仓库约定
+
+本仓库是**公开仓库**，任何提交（含历史）都对全网可见。提交前请遵守：
+
+- **不提交任何密钥**：API Key、令牌、证书、描述文件一律不入库。LLM Key 存 Keychain，Garmin 账号密码走 Keychain 或环境变量。
+- **敏感值用占位符**：账号邮箱写 `user@example.com`，设备 UDID 写 `<UDID>`，本机路径写 `~/...`。
+- **不提交构建产物**：`.build/`、`DerivedData/`、`*.pcm`、`*.xcodeproj`（由 XcodeGen 生成）均已在 `.gitignore` 中。
+- **不提交含 EXIF 的原图**：`docs/test-images/` 已在 `.gitignore` 中，样本图只在本地保留。
+- 提交前跑一次扫描：
+
+```bash
+./tools/scan-secrets.sh          # 扫当前跟踪文件
+./tools/scan-secrets.sh --history # 连历史一起扫（较慢）
+```
+
+---
+
 ## 仓库位置与自动推送
 
 - 本仓库放在 **`~/Developer/FoodJournal`**，刻意不放 `~/Documents`：该目录受 macOS TCC 保护，launchd 后台任务读不到，自动推送会以退出码 126 静默失败（错误会写进 `~/Library/Logs/foodjournal-autopush.err.log`）。
@@ -165,7 +182,7 @@ xcodebuild -project FoodJournal.xcodeproj -scheme FoodJournal \
 | `M2-thinking提速验证.md` | 关闭 thinking 后的识图延迟对比 |
 | `E2S-登录流程规格.md` | 佳明登录流程技术规格（依据 garth 0.8.0 源码） |
 | `E2S-spike结果.md` / `R5-5-garmin验证.md` | 佳明接入可行性验证与账号验证报告 |
-| `test-images/` | 识图评测用样本图 |
+| `test-images/` | 识图评测样本原图（**不入库**，见下方「公开仓库约定」） |
 
 ---
 
