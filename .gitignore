@@ -5,10 +5,12 @@ xcuserdata/
 
 # 构建派生物
 build/
+.build/
 DerivedData/
 *.xcarchive
 *.ipa
 *.dSYM/
+*.pcm
 
 # XcodeGen 生成的工程文件（由 project.yml 重新生成）
 *.xcodeproj
