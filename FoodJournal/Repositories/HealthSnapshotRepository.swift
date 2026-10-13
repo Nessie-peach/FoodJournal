@@ -16,6 +16,7 @@ protocol HealthSnapshotRepositoryProtocol {
         sleepEnd: Date?,
         avgHR: Double,
         hrvMS: Double?,
+        hrvSource: String?,
         workoutsJSON: String?,
         syncedAt: Date
     ) throws -> DailyHealthSnapshot
@@ -108,6 +109,7 @@ final class HealthSnapshotRepository: HealthSnapshotRepositoryProtocol {
         sleepEnd: Date? = nil,
         avgHR: Double,
         hrvMS: Double? = nil,
+        hrvSource: String? = nil,
         workoutsJSON: String? = nil,
         syncedAt: Date
     ) throws -> DailyHealthSnapshot {
@@ -119,6 +121,8 @@ final class HealthSnapshotRepository: HealthSnapshotRepositoryProtocol {
             existing.sleepEnd = sleepEnd
             existing.avgHR = avgHR
             existing.hrvMS = hrvMS
+            // 仅在本次明确给出 HRV 口径时覆盖：避免 HealthKit 无 HRV 时抹掉 Garmin 侧写入的标注
+            if let hrvSource { existing.hrvSource = hrvSource }
             existing.workoutsJSON = workoutsJSON
             existing.syncedAt = syncedAt
             try context.save()
@@ -133,6 +137,7 @@ final class HealthSnapshotRepository: HealthSnapshotRepositoryProtocol {
             sleepEnd: sleepEnd,
             avgHR: avgHR,
             hrvMS: hrvMS,
+            hrvSource: hrvSource,
             workoutsJSON: workoutsJSON,
             syncedAt: syncedAt
         )
@@ -156,6 +161,10 @@ final class HealthSnapshotRepository: HealthSnapshotRepositoryProtocol {
             existing.hrvWeeklyAvg = fields.hrvWeeklyAvg
             existing.hrvBaselineLow = fields.hrvBaselineLow
             existing.hrvBaselineHigh = fields.hrvBaselineHigh
+            // 佳明 HRV Status 基于 RMSSD，与 Apple SDNN 口径不同：有佳明 HRV 数据时标注口径
+            if fields.hrvLastNightAvg != nil {
+                existing.hrvSource = HRVSource.garmin.rawValue
+            }
             existing.bodyBatteryCurrent = fields.bodyBatteryCurrent
             existing.stressAvg = fields.stressAvg
             existing.deepSleepMin = fields.deepSleepMin
@@ -176,6 +185,9 @@ final class HealthSnapshotRepository: HealthSnapshotRepositoryProtocol {
         snapshot.hrvWeeklyAvg = fields.hrvWeeklyAvg
         snapshot.hrvBaselineLow = fields.hrvBaselineLow
         snapshot.hrvBaselineHigh = fields.hrvBaselineHigh
+        if fields.hrvLastNightAvg != nil {
+            snapshot.hrvSource = HRVSource.garmin.rawValue
+        }
         snapshot.bodyBatteryCurrent = fields.bodyBatteryCurrent
         snapshot.stressAvg = fields.stressAvg
         snapshot.deepSleepMin = fields.deepSleepMin
