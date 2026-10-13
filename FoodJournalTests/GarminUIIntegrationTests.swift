@@ -164,8 +164,8 @@ final class GarminUIIntegrationTests: XCTestCase {
 
     func testEmailMasking() {
         XCTAssertEqual(GarminAccountMasker.mask("user@example.com"), "user***@example.com")
-        XCTAssertEqual(GarminAccountMasker.mask("ab@example.com"), "ab***@outlook.com")
-        XCTAssertEqual(GarminAccountMasker.mask("longlocalpart@example.com"), "longloc***@qq.com")
+        XCTAssertEqual(GarminAccountMasker.mask("ab@example.com"), "ab***@example.com")
+        XCTAssertEqual(GarminAccountMasker.mask("longlocalpart@example.com"), "longloc***@example.com")
         XCTAssertEqual(GarminAccountMasker.mask("no-at-sign"), "***")
         XCTAssertEqual(GarminAccountMasker.mask(""), "***")
     }

@@ -17,9 +17,9 @@ final class GarminOAuth1SignerTests: XCTestCase {
     /// （Twitter 官方 OAuth 文档的经典用例，与刺探实现同一套构造规则）
     func testOAuth1SignatureKnownVector() {
         let consumerKey = "xvz1evFS4wEEPTGEFPHBog"
-        let consumerSecret = "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw"
+        let consumerSecret = "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw"   // scan-secrets:allow（公开测试向量/假值）
         let token = "370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb"
-        let tokenSecret = "LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE"
+        let tokenSecret = "LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE"   // scan-secrets:allow（公开测试向量/假值）
         let nonce = "kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg"
         let timestamp = "1318622958"
         let url = "https://api.twitter.com/1.1/statuses/update.json"
@@ -78,7 +78,7 @@ private final class MockExchanger: GarminOAuth2Exchanging, @unchecked Sendable {
     var callCount = 0
     func exchange(oauth1Token: String, oauth1Secret: String, mfaToken: String?, includeAudience: Bool) async throws -> GarminOAuth2ExchangeResult {
         callCount += 1
-        return GarminOAuth2ExchangeResult(accessToken: "refreshed-access", refreshToken: "refreshed-refresh", expiresIn: 81944)
+        return GarminOAuth2ExchangeResult(accessToken: "refreshed-access", refreshToken: "refreshed-refresh", expiresIn: 81944)   // scan-secrets:allow（公开测试向量/假值）
     }
 }
 

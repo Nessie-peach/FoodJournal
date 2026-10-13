@@ -17,3 +17,6 @@ DerivedData/
 
 # macOS
 .DS_Store
+
+# 评测样本原图（含 EXIF，不入公开仓库；本地保留）
+docs/test-images/
